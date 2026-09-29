@@ -14,9 +14,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            name: CanalBooker-Windows
+            asset: CanalBooker.exe
           - os: macos-latest
-            name: CanalBooker-Mac
+            asset: CanalBooker-Mac.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,15 +28,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      # One file per computer, nothing to unzip on Windows. Playwright's browsers are not
+      # bundled: the app uses the Edge or Chrome already on the computer.
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: >
           pyinstaller run.py --name CanalBooker --onefile --noconsole
           --add-data "app/static;app/static" --add-data "portal_recipe.json;." --add-data "app_defaults.json;."
           --collect-all playwright --hidden-import keyring.backends.Windows
+          --exclude-module tkinter --exclude-module unittest --exclude-module pydoc
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist/CanalBooker.exe -DestinationPath ${{ matrix.name }}.zip
+        run: Copy-Item dist/CanalBooker.exe CanalBooker.exe
 
       - name: Build (Mac)
         if: runner.os == 'macOS'
@@ -44,14 +47,15 @@ jobs:
           pyinstaller run.py --name CanalBooker --windowed --onedir
           --add-data "app/static:app/static" --add-data "portal_recipe.json:." --add-data "app_defaults.json:."
           --collect-all playwright --hidden-import keyring.backends.macOS
+          --exclude-module tkinter --exclude-module unittest --exclude-module pydoc
       - name: Package (Mac)
         if: runner.os == 'macOS'
-        run: cd dist && ditto -c -k --keepParent CanalBooker.app ../${{ matrix.name }}.zip
+        run: cd dist && ditto -c -k --keepParent CanalBooker.app ../CanalBooker-Mac.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}.zip
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
 
   release:
     needs: build
@@ -63,4 +67,6 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: "*.zip"
+          files: |
+            CanalBooker.exe
+            CanalBooker-Mac.zip

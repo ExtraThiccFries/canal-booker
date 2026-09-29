@@ -54,7 +54,7 @@ DEFAULT_SETTINGS = {
     "race_window_seconds": 120,  # how long to keep checking after the open time
     "race_poll_ms": 1500,        # how often each ready form re-checks the calendar
     "show_browser": False,
-    "paused": False,
+    "paused": True,         # new installs start paused; the setup guide's last step turns it on
 }
 
 

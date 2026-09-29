@@ -1,0 +1,44 @@
+name: Book my room
+
+# Runs Canal Booker in the cloud every night. GitHub often starts scheduled jobs late
+# (sometimes 10 to 30 minutes), so the job starts about an hour or more before midnight
+# Ottawa time, then waits and gets ready a couple of minutes before the new day opens.
+# 03:05 and 03:35 UTC = 11:05 and 11:35 pm (EDT, summer), 10:05 and 10:35 pm (EST, winter).
+# The second start is a backup in case GitHub skips the first; if the first is already
+# waiting, the second queues behind it and finds nothing left to do.
+on:
+  schedule:
+    - cron: "5 3 * * *"
+    - cron: "35 3 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "test = dry run right now (nothing booked). book = wait for the next midnight and book."
+        type: choice
+        options: [test, book]
+        default: test
+
+concurrency:
+  group: canal-booker
+  cancel-in-progress: false
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        # Google Chrome is already on GitHub's machines, so no browser download is needed.
+        run: pip install -q "playwright>=1.45" tzdata certifi
+      - name: Book
+        env:
+          CARLETON_USERNAME: ${{ secrets.CARLETON_USERNAME }}
+          CARLETON_PASSWORD: ${{ secrets.CARLETON_PASSWORD }}
+          TEAM_PLAN_URL: ${{ vars.TEAM_PLAN_URL }}
+          ROOMS: ${{ vars.ROOMS }}
+          MODE: ${{ inputs.mode || 'book' }}
+        run: python -m app.cloud

@@ -64,6 +64,14 @@
   #toast.show { opacity: 1; }
   a { color: var(--accent); }
   details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  ol.guide { margin: 8px 0 0; padding: 0; list-style: none; counter-reset: g; }
+  ol.guide li { counter-increment: g; display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: start;
+    padding: 10px 0; border-top: 1px solid var(--line); }
+  ol.guide li::before { content: counter(g); display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 13px; }
+  ol.guide li.done::before { content: "✓"; background: var(--ok-soft); color: var(--ok); }
+  ol.guide li > div > b:first-child { display: block; }
+  ol.guide li span.sub { margin: 0; display: block; }
 </style>
 </head>
 <body>
@@ -81,6 +89,23 @@
 </header>
 
 <main class="wrap">
+  <section class="card" id="guideCard" hidden>
+    <h2>Set up in 4 steps</h2>
+    <p class="sub" style="margin:0">Each step ticks itself off when it is done. You need Chrome or Edge (every Windows computer has Edge).</p>
+    <ol class="guide">
+      <li id="g1"><div><b>Sign in</b><span class="sub">Type your MyCarletonOne username (the part before @carleton.ca) and password
+        in box 1 below, click <b>Save sign-in</b>, then <b>Test sign-in</b>. Your password stays on this computer.</span></div></li>
+      <li id="g2"><div><b>Get your slots</b><span class="sub">Your rooms and times come from the group's sheet. Make sure your rows are
+        in it, then click the button. Or type them into boxes 2 and 3 yourself and click <b>Save changes</b>.</span></div>
+        <button class="small" id="gImportBtn">Use my slots from the sheet</button></li>
+      <li id="g3"><div><b>Do a dry run</b><span class="sub">Goes through every step on the real portal except the final OK, so nothing is
+        booked. Check it says "Dry run OK" in Activity.</span></div><button class="small" id="gDryBtn">Dry run</button></li>
+      <li id="g4"><div><b>Turn it on</b><span class="sub">Starts booking every night at midnight and opens with your computer. Keep the
+        computer plugged in, awake and online at midnight. You can close this page afterwards.</span></div>
+        <button class="small primary" id="gOnBtn">Turn on</button></li>
+    </ol>
+  </section>
+
   <div class="banner" id="recipeBanner" hidden>
     The booking steps have not been confirmed on the real portal yet. Use <b>Dry run</b> first. It goes through every step
     except the final button, and saves screenshots so you can see what happened.
@@ -302,6 +327,15 @@ $("raceTestBtn").onclick = async () => {
   if (dirty && !(await saveMain())) return;
   const r = await api("run", { dry_run: true, race: true }); toast(r.message); refresh();
 };
+$("gImportBtn").onclick = () => $("importTeamBtn").click();
+$("gDryBtn").onclick = () => startRun(true);
+$("gOnBtn").onclick = async () => {
+  const r = await api("settings", { paused: false });
+  if (!r.ok) return toast(r.message);
+  const a = await api("autostart", { enabled: true });
+  toast(a.ok ? "Canal Booker is on. It books every night at midnight." : "Turned on, but could not set it to start with the computer: " + a.message);
+  refresh(true);
+};
 $("runBtn").onclick = () => startRun(false);
 $("dryBtn").onclick = () => startRun(true);
 
@@ -366,6 +400,15 @@ async function refresh(forceForm) {
     }
   }
   $("autostart").checked = s.autostart;
+  const steps = [
+    !!(st.username && s.has_password),
+    !!(st.rooms.length && st.slots.length),
+    s.log.some(e => e.status === "dry_run" || e.status === "booked"),
+    !st.paused && s.autostart,
+  ];
+  steps.forEach((ok, i) => $("g" + (i + 1)).classList.toggle("done", ok));
+  $("gOnBtn").hidden = steps[3];
+  $("guideCard").hidden = steps.every(Boolean);
   $("aheadText").textContent = st.days_ahead;
   $("pwState").textContent = s.has_password ? "saved" : "not saved";
   $("pwState").className = "pill " + (s.has_password ? "" : "grey");

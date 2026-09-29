@@ -141,9 +141,13 @@ def create_app(scheduler):
             clean = validate(request.get_json(force=True) or {})
         except (ValueError, TypeError) as e:
             return jsonify({"ok": False, "message": str(e)}), 400
-        before = storage.run_times(storage.load_settings())
+        old = storage.load_settings()
+        before = storage.run_times(old)
         storage.save_settings(clean)
-        if "book_times" in clean:
+        if clean.get("paused") is False and old["paused"]:
+            # Turning it on starts from the next run time, never a surprise run right now.
+            scheduler.skip_passed_new_times([], storage.run_times(storage.load_settings()))
+        elif "book_times" in clean:
             scheduler.skip_passed_new_times(before, clean["book_times"])
         return jsonify({"ok": True, "message": "Saved."})
 
