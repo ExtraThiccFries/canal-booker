@@ -133,9 +133,10 @@
 
   <section class="card">
     <h2>Team plan</h2>
-    <p class="sub">Paste the link to schedule.json in your group's GitHub repo to see who covers which slot and copy yours in.</p>
+    <p class="sub">Paste the link to your group's Google Sheet (shared as "Anyone with the link") or a schedule.json
+      to see who covers which slot and copy yours in.</p>
     <div class="row">
-      <input id="teamUrl" placeholder="https://github.com/…/schedule.json" style="flex:1">
+      <input id="teamUrl" placeholder="https://docs.google.com/spreadsheets/d/…" style="flex:1">
       <button id="loadTeamBtn">Load</button>
       <button id="importTeamBtn">Use my slots from it</button>
     </div>
@@ -168,6 +169,15 @@
           <input id="event_title">
           <label for="attendees">Number of people</label>
           <input id="attendees" type="number" min="1" max="50">
+          <label style="margin-top:14px"><input type="checkbox" id="race"> <b>Midnight mode</b>: sign in early, wait on the page,
+            and book the second the day opens</label>
+          <label for="open_time">The portal opens a new day at</label>
+          <input id="open_time" type="time">
+          <label for="race_lead_seconds">Get ready this many seconds before</label>
+          <input id="race_lead_seconds" type="number" min="60" max="900">
+          <label for="race_window_seconds">Keep checking for this many seconds after</label>
+          <input id="race_window_seconds" type="number" min="10" max="900">
+          <button class="small" id="raceTestBtn" style="margin-top:8px">Test midnight mode (dry run)</button>
           <label><input type="checkbox" id="show_browser"> Show the browser while booking</label>
           <label><input type="checkbox" id="paused"> Pause automatic booking</label>
           <label><input type="checkbox" id="autostart"> Start Canal Booker when this computer starts</label>
@@ -288,6 +298,10 @@ async function startRun(dry) {
   if (dirty && !(await saveMain())) return;
   const r = await api("run", { dry_run: dry }); toast(r.message); refresh();
 }
+$("raceTestBtn").onclick = async () => {
+  if (dirty && !(await saveMain())) return;
+  const r = await api("run", { dry_run: true, race: true }); toast(r.message); refresh();
+};
 $("runBtn").onclick = () => startRun(false);
 $("dryBtn").onclick = () => startRun(true);
 
@@ -300,7 +314,9 @@ $("loadTeamBtn").onclick = async () => {
   rows.sort((a, b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || a.start.localeCompare(b.start));
   $("teamTable").innerHTML = `<p class="sub" style="margin:0 0 8px">Shared rooms: ${esc((p.rooms || []).join(", ") || "none listed")}</p>
     <table><thead><tr><th>Day</th><th>Time</th><th>Who books it</th></tr></thead><tbody>${
-    rows.map(s => `<tr><td>${esc(s.day)}</td><td>${fmtTime(s.start)} to ${fmtTime(s.end)}</td><td>${esc(s.who)}</td></tr>`).join("")
+    rows.map(s => `<tr><td>${esc(s.day)}</td><td>${fmtTime(s.start)} to ${fmtTime(s.end)}${(s.alts || []).length
+      ? `<br><span class="sub">backup: ${s.alts.map(a => fmtTime(a.start) + "–" + fmtTime(a.end)).join(", ")}</span>` : ""}</td>
+      <td>${esc(s.who)}</td></tr>`).join("")
     || `<tr><td colspan="3" class="empty">No slots in the plan yet.</td></tr>`}</tbody></table>`;
 };
 $("importTeamBtn").onclick = async () => {
@@ -322,6 +338,8 @@ $("addRunTimeBtn").onclick = () => { runTimes.push("12:00"); renderRunTimes(); }
 $("saveSettingsBtn").onclick = async () => {
   const body = { book_times: runTimes.filter(Boolean), days_ahead: +$("days_ahead").value, retry_minutes: +$("retry_minutes").value,
     retry_every_seconds: +$("retry_every_seconds").value,
+    race: $("race").checked, open_time: $("open_time").value,
+    race_lead_seconds: +$("race_lead_seconds").value, race_window_seconds: +$("race_window_seconds").value,
     event_title: $("event_title").value, attendees: +$("attendees").value,
     show_browser: $("show_browser").checked, paused: $("paused").checked };
   const r = await api("settings", body); toast(r.message); refresh();
@@ -339,7 +357,9 @@ async function refresh(forceForm) {
     if (!loaded || forceForm) {
       rooms = [...st.rooms]; slots = st.slots.map(x => ({ ...x }));
       $("username").value = st.username; $("teamUrl").value = st.team_plan_url || "";
-      for (const k of ["days_ahead", "retry_minutes", "retry_every_seconds", "event_title", "attendees"]) $(k).value = st[k];
+      for (const k of ["days_ahead", "retry_minutes", "retry_every_seconds", "event_title", "attendees",
+                       "open_time", "race_lead_seconds", "race_window_seconds"]) $(k).value = st[k];
+      $("race").checked = st.race;
       runTimes = [...(st.book_times && st.book_times.length ? st.book_times : [st.book_time])]; renderRunTimes();
       $("show_browser").checked = st.show_browser; $("paused").checked = st.paused;
       renderRooms(); renderSlots(); loaded = true;
@@ -355,7 +375,12 @@ async function refresh(forceForm) {
   if (s.busy) line = s.status + "…";
   else if (st.paused) line = "Paused. Nothing will be booked automatically.";
   else if (!st.username || !s.has_password || !st.rooms.length || !st.slots.length) line = "Finish steps 1 to 3 to start booking.";
-  else line = "Running. Next booking run " + new Date(s.next_run).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }) + ".";
+  else {
+    const at = d => new Date(d).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+    line = s.next_race
+      ? `Running. Midnight mode goes for ${fmtDate(s.next_race.date)} when it opens ${at(s.next_race.open_at)}.`
+      : "Running. Next booking run " + at(s.next_run) + ".";
+  }
   $("statusLine").textContent = line;
 
   $("upcoming").innerHTML = s.upcoming.map(u => `<tr><td>${fmtDate(u.date)}</td><td>${fmtTime(u.start)} to ${fmtTime(u.end)}</td>

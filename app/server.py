@@ -67,17 +67,23 @@ def validate(body: dict) -> dict:
         if len(times) > 12:
             raise ValueError("Keep it to 12 run times a day or fewer.")
         out["book_times"] = times
+    if "open_time" in body:
+        if not HM.match(str(body["open_time"])):
+            raise ValueError("The portal opening time must look like 00:00.")
+        out["open_time"] = body["open_time"]
     for key, lo, hi in (("days_ahead", 1, 14), ("retry_minutes", 0, 120),
-                        ("retry_every_seconds", 30, 600), ("attendees", 1, 50)):
+                        ("retry_every_seconds", 30, 600), ("attendees", 1, 50),
+                        ("race_lead_seconds", 60, 900), ("race_window_seconds", 10, 900),
+                        ("race_poll_ms", 1000, 10000)):
         if key in body:
             v = int(body[key])
             if not lo <= v <= hi:
                 raise ValueError(f"{key.replace('_', ' ')} must be between {lo} and {hi}.")
             out[key] = v
-    for key in ("event_title", "team_plan_url"):
+    for key in ("event_title", "team_plan_url", "recipe_url"):
         if key in body:
-            out[key] = str(body[key]).strip()[:200]
-    for key in ("show_browser", "paused"):
+            out[key] = str(body[key]).strip()[:300]
+    for key in ("show_browser", "paused", "race"):
         if key in body:
             out[key] = bool(body[key])
     return out
@@ -122,6 +128,7 @@ def create_app(scheduler):
             "status": scheduler.status,
             "busy": scheduler.run_lock.locked(),
             "next_run": scheduler.next_run(s),
+            "next_race": scheduler.next_race(s),
             "upcoming": scheduler.upcoming(s),
             "log": list(reversed(storage.load_log()))[:60],
             "autostart": auto,
@@ -134,7 +141,10 @@ def create_app(scheduler):
             clean = validate(request.get_json(force=True) or {})
         except (ValueError, TypeError) as e:
             return jsonify({"ok": False, "message": str(e)}), 400
+        before = storage.run_times(storage.load_settings())
         storage.save_settings(clean)
+        if "book_times" in clean:
+            scheduler.skip_passed_new_times(before, clean["book_times"])
         return jsonify({"ok": True, "message": "Saved."})
 
     @app.post("/api/password")
@@ -173,9 +183,13 @@ def create_app(scheduler):
 
     @app.post("/api/run")
     def run():
-        dry = bool((request.get_json(force=True) or {}).get("dry_run"))
+        body = request.get_json(force=True) or {}
+        dry = bool(body.get("dry_run"))
         if scheduler.run_lock.locked():
             return jsonify({"ok": False, "message": "A booking run is already going."}), 409
+        if body.get("race"):  # test midnight mode right now; always a dry run
+            threading.Thread(target=scheduler.race_test, daemon=True).start()
+            return jsonify({"ok": True, "message": "Midnight mode test started (dry run). Watch Activity below."})
         threading.Thread(target=scheduler.run, kwargs={"dry_run": dry}, daemon=True).start()
         return jsonify({"ok": True, "message": ("Dry run" if dry else "Booking") + " started. Watch Activity below."})
 
@@ -185,7 +199,7 @@ def create_app(scheduler):
         if not url:
             return jsonify({"ok": False, "message": "Add the team plan link first."}), 400
         try:
-            return jsonify({"ok": True, "plan": storage.fetch_json(url)})
+            return jsonify({"ok": True, "plan": storage.fetch_plan(url)})
         except Exception as e:
             return jsonify({"ok": False, "message": f"Could not load the team plan: {e}"}), 502
 
@@ -193,15 +207,19 @@ def create_app(scheduler):
     def team_import():
         s = storage.load_settings()
         try:
-            plan = storage.fetch_json(s["team_plan_url"])
+            plan = storage.fetch_plan(s["team_plan_url"])
         except Exception as e:
             return jsonify({"ok": False, "message": f"Could not load the team plan: {e}"}), 502
         me = next((p for p in plan.get("people", [])
                    if str(p.get("username", "")).lower() == s["username"].lower()), None)
         if not me:
             return jsonify({"ok": False, "message": f"'{s['username']}' is not in the team plan yet."}), 404
+        body = {"slots": me.get("slots", [])}
+        rooms = me.get("rooms") or plan.get("rooms", [])
+        if rooms:  # blank rooms in the plan keep the rooms already set in the app
+            body["rooms"] = rooms
         try:
-            clean = validate({"slots": me.get("slots", []), "rooms": me.get("rooms") or plan.get("rooms", [])})
+            clean = validate(body)
         except ValueError as e:
             return jsonify({"ok": False, "message": f"The team plan has a problem: {e}"}), 400
         storage.save_settings(clean)

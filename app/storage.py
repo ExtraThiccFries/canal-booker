@@ -5,8 +5,11 @@ Everything personal lives in a per-user data folder, never in the repo:
   Mac:     ~/Library/Application Support/CanalBooker
 Passwords go into the operating system keychain through `keyring`.
 """
+import csv
+import io
 import json
 import os
+import re
 import ssl
 import sys
 import threading
@@ -43,7 +46,13 @@ DEFAULT_SETTINGS = {
     "retry_every_seconds": 90,
     "event_title": "Group study",
     "attendees": 4,
-    "team_plan_url": "",
+    "team_plan_url": "",    # Google Sheet link or schedule.json link
+    "recipe_url": "",       # where booking-step updates come from (portal_recipe.json on GitHub)
+    "race": True,           # midnight mode: sign in early, wait on the page, book the second the day opens
+    "open_time": "00:00",   # when the portal opens a new day
+    "race_lead_seconds": 150,    # how early to sign in and get the forms ready
+    "race_window_seconds": 120,  # how long to keep checking after the open time
+    "race_poll_ms": 1500,        # how often each ready form re-checks the calendar
     "show_browser": False,
     "paused": False,
 }
@@ -165,20 +174,109 @@ def set_password(username: str, password: str):
     keyring.set_password(KEYRING_SERVICE, username, password)
 
 
-# ---------- shared files from GitHub ----------
+# ---------- shared files from GitHub or Google Sheets ----------
+
+_SHEET = re.compile(r"docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]+)")
+
+
+def is_google_sheet(url: str) -> bool:
+    return bool(_SHEET.search(url or ""))
+
 
 def to_raw_url(url: str) -> str:
-    """Accept a normal GitHub file link and turn it into the raw file link."""
+    """Accept a normal GitHub file link or a Google Sheet link and turn it into a downloadable link."""
     url = (url or "").strip()
     if "github.com" in url and "/blob/" in url:
         url = url.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/", 1)
+    m = _SHEET.search(url)
+    if m:
+        gid = re.search(r"[#&?]gid=(\d+)", url)
+        url = f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv" + (f"&gid={gid.group(1)}" if gid else "")
     return url
 
 
-def fetch_json(url: str):
+def _fetch_text(url: str) -> str:
     req = urllib.request.Request(to_raw_url(url), headers={"User-Agent": "CanalBooker", "Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=10, context=_SSL) as r:
-        return json.loads(r.read().decode("utf-8"))
+        return r.read().decode("utf-8-sig")
+
+
+def fetch_json(url: str):
+    return json.loads(_fetch_text(url))
+
+
+def _norm_time(text: str) -> str:
+    """'9:00', '09:00:00', '9:00 AM', '3 PM' -> 'HH:MM'. Returns '' if it is not a time."""
+    m = re.match(r"^\s*(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*([AaPp])?\.?[Mm]?\.?\s*$", str(text or ""))
+    if not m:
+        return ""
+    h, mins, ap = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+    if ap == "p" and h < 12:
+        h += 12
+    if ap == "a" and h == 12:
+        h = 0
+    return f"{h:02d}:{mins:02d}" if h < 24 and mins < 60 else ""
+
+
+def parse_plan_csv(text: str) -> dict:
+    """Turn the team plan sheet into the same shape as schedule.json.
+    Rows above the header row (the one with Username and Day) are instructions and are skipped."""
+    rows = list(csv.reader(io.StringIO(text)))
+    head = None
+    for i, row in enumerate(rows):
+        lower = [c.strip().lower() for c in row]
+        if "username" in lower and "day" in lower:
+            head = i
+            break
+    if head is None:
+        raise ValueError("The sheet needs a header row with Name, Username, Day, Start, End columns.")
+    names = [c.strip().lower() for c in rows[head]]
+
+    def col(row, *keys):
+        for k in keys:
+            for j, n in enumerate(names):
+                if n.startswith(k) and j < len(row):
+                    return row[j].strip()
+        return ""
+
+    people, order = {}, []
+    for row in rows[head + 1:]:
+        user = col(row, "username").split("@")[0]
+        day = col(row, "day")[:3].title()
+        start, end = _norm_time(col(row, "start")), _norm_time(col(row, "end"))
+        if not user or day not in DAYS or not start or not end:
+            continue
+        key = user.lower()
+        if key not in people:
+            people[key] = {"name": col(row, "name") or user, "username": user, "slots": [], "rooms": []}
+            order.append(key)
+        alts = []
+        for part in col(row, "backup").split(","):
+            if "-" in part:
+                a, b = part.split("-", 1)
+                if _norm_time(a) and _norm_time(b):
+                    alts.append({"start": _norm_time(a), "end": _norm_time(b)})
+        people[key]["slots"].append({"day": day, "start": start, "end": end, "alts": alts})
+        rooms = [r.strip() for r in col(row, "room").split(",") if r.strip()]
+        if rooms and not people[key]["rooms"]:
+            people[key]["rooms"] = rooms
+    plan_rooms = []
+    for k in order:
+        for r in people[k]["rooms"]:
+            if r not in plan_rooms:
+                plan_rooms.append(r)
+    return {"rooms": plan_rooms, "people": [people[k] for k in order]}
+
+
+def fetch_plan(url: str) -> dict:
+    """Load the team plan from a Google Sheet or a schedule.json link."""
+    if not is_google_sheet(url):
+        return fetch_json(url)
+    text = _fetch_text(url)
+    if text.lstrip().lower().startswith(("<!doctype", "<html")):
+        raise ValueError("Google did not share the sheet. In the sheet, click Share and set General access "
+                         "to 'Anyone with the link' (Viewer).")
+    return parse_plan_csv(text)
 
 
 def load_recipe() -> dict:
@@ -191,12 +289,15 @@ def load_recipe() -> dict:
 
 
 def refresh_recipe(settings: dict):
-    """If a team plan link is set, grab portal_recipe.json from the same folder on GitHub."""
-    url = to_raw_url(settings.get("team_plan_url", ""))
+    """Grab the newest portal_recipe.json: from recipe_url, or else from the same GitHub folder as the team plan."""
+    url = settings.get("recipe_url", "")
     if not url:
-        return
+        plan = settings.get("team_plan_url", "")
+        if not plan or is_google_sheet(plan):
+            return
+        url = to_raw_url(plan).rsplit("/", 1)[0] + "/portal_recipe.json"
     try:
-        recipe = fetch_json(url.rsplit("/", 1)[0] + "/portal_recipe.json")
+        recipe = fetch_json(url)
         if isinstance(recipe, dict) and "book" in recipe:
             with _lock:
                 _write_json(data_dir() / "portal_recipe.json", recipe)

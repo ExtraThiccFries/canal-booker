@@ -22,21 +22,22 @@ You will need Google Chrome or Microsoft Edge installed. Every Windows computer 
 
 ### Keep in mind
 
-* Your computer needs to be on and awake when slots open (12:00 am). If it was asleep, the app catches up when it wakes, but someone else may have taken the room by then. Setting your computer to not sleep while plugged in helps.
+* The app runs on your computer, not in the cloud. Your computer needs to be on, awake and online a few minutes before midnight. If it was asleep, the app catches up when it wakes, but someone else may have taken the room by then. Set your computer to not sleep while plugged in, and make sure its clock is set automatically.
 * The library style check-in rules do not apply here, but please cancel any booking you will not use through the portal. Unused rooms block other students, and the portal can see who booked them.
 
 ## For the organizer
 
 ### One time setup
 
-1. Create a private GitHub repo and upload everything in this folder.
-2. Edit `schedule.json` on GitHub. Put in the real room names, each person's MyCarletonOne username, and their slots. Each person gets at most one slot per day, 3 hours or less.
-3. Open `app_defaults.json` and set `team_plan_url` to the link of `schedule.json` in your repo, for example `https://github.com/yourname/canal-booker/blob/main/schedule.json`. Everyone's app will then find the plan on its own. If the repo is private, this link only works for people who are signed in to GitHub in that browser, so a public repo is easier. The file contains no passwords.
-4. To publish downloads, go to **Releases**, click **Draft a new release**, create a tag like `v1.0`, and publish. GitHub builds the Windows and Mac downloads for you in a few minutes and attaches them to the release.
+1. Create a GitHub repo and upload everything in this folder.
+2. Make the team plan: a Google Sheet with a header row `Name, Username, Day, Start, End, Backup times, Rooms (in order)` and one row per person per day. Rows above the header are ignored, so instructions can go there. Each person gets at most one slot per day, 3 hours or less.
+3. In the sheet, click **Share**, set General access to **Anyone with the link** (Viewer), and add your group as Editors so they can fill in their rows.
+4. Open `app_defaults.json` and set `team_plan_url` to the sheet link, and `recipe_url` to the link of `portal_recipe.json` in your repo. Everyone's app then finds both on its own. A `schedule.json` link on GitHub also works as the team plan.
+5. To publish downloads, push a tag like `v1.0` (or create a release with that tag). GitHub builds the Windows and Mac downloads in a few minutes and attaches them to the release.
 
 ### Changing the schedule later
 
-Edit `schedule.json` on GitHub. Each person then clicks **Use my slots from it** in their app. The Team plan box always shows the current plan.
+Edit the sheet. Each person then clicks **Use my slots from it** in their app. The Team plan box always shows the current plan. Leaving Rooms blank on a row keeps the rooms that person already set in their app.
 
 ### Confirming the booking steps (do this first)
 
@@ -51,9 +52,11 @@ To confirm them:
 
 ### When slots open
 
-Study rooms can be booked up to one week ahead. A whole day opens at exactly midnight one week before, so at 12:00 am on Sep 30 all of Oct 7 opens. The app runs at 12:00 am by default, goes for the newly opened day first, then fills any earlier gaps. If a room is not free yet it retries every 30 seconds for 20 minutes.
+Study rooms can be booked up to one week ahead. A whole day opens at exactly midnight one week before, so at 12:00 am on Sep 30 all of Oct 7 opens.
 
-You can add more run times in **Settings** (for example a morning run to pick up cancellations). Everyone's default is set in `app_defaults.json` as `"book_times": ["00:00"]`. If the computer was asleep at a run time, the run happens as soon as it wakes.
+**Midnight mode** (on by default) is built for that moment. About 2.5 minutes before midnight the app signs in and opens one tab per room and time choice, each filled in up to the calendar. It reads the portal's clock, and from 3 seconds before midnight every tab re-checks the calendar every 1.5 seconds. The first choice that opens is booked, usually within a couple of seconds. If your first choice was grabbed by someone else, the next choice is already on screen. **Test midnight mode (dry run)** in Settings runs the same thing right now on an already open day, without booking.
+
+After midnight mode, a normal run fills any earlier gaps, and retries every 30 seconds for 20 minutes. You can add more run times in **Settings** (for example a morning run to pick up cancellations). Everyone's defaults are in `app_defaults.json`. If the computer was asleep at a run time, the run happens as soon as it wakes. A run time you add after it has already passed today starts tomorrow.
 
 Each time slot can have **backup times**. The booker tries your first room at the main time, then at each backup time, then moves to the next room. The portal allows one 3 hour booking per person per day, so once a day is booked it is skipped.
 

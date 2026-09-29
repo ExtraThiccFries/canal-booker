@@ -16,7 +16,9 @@ Step format:
   {"action": "wait",   "ms": 1000}
 Optional keys: "optional": true, "timeout": ms, "note": "...",
   "on_fail": "unavailable" | "login_failed" | "error",
-  "submit": true  (a dry run stops right before this step).
+  "submit": true  (a dry run stops right before this step),
+  "race_start": true  (midnight mode: steps before this are done early, steps from here on
+                       run once the "race.ready" selector shows up after "race.refresh").
 Placeholders: {username} {password} {room} {date} {start} {end} {title} {attendees} {day}
   {room_number} (last word of the room, "CB 2103" -> "2103")
   {date_epoch} (the date as UTC midnight in seconds, used by the portal's calendar cells)
@@ -25,7 +27,9 @@ Selectors are Playwright selectors: CSS, text=..., role=button[name="Search"], e
 """
 import calendar
 import datetime as dt
+import email.utils
 import re
+import time
 
 from . import storage
 
@@ -147,12 +151,143 @@ def test_login(settings, password):
     return {"ok": ok, "message": msg, "screenshot": shot}
 
 
+def _ctx(base, recipe, day, room, start_text, end_text):
+    date_fmt = recipe.get("date_format", "%Y-%m-%d")
+    time_fmt = recipe.get("time_format", "%H:%M")
+    start = dt.datetime.strptime(start_text, "%H:%M")
+    end = dt.datetime.strptime(end_text, "%H:%M")
+
+    def fmt(t):
+        text = t.strftime(time_fmt)
+        return text.lstrip("0") if recipe.get("strip_leading_zero") else text
+
+    return dict(base, room=room, date=day.strftime(date_fmt), day=storage.DAYS[day.weekday()],
+                room_number=room.split()[-1] if room.split() else room,
+                date_epoch=calendar.timegm(day.timetuple()),
+                start_min=start.hour * 60 + start.minute, end_min=end.hour * 60 + end.minute,
+                duration_min=int((end - start).total_seconds() // 60),
+                start=fmt(start), end=fmt(end))
+
+
+def _clock_offset(page, url):
+    """Seconds the portal's clock is ahead of ours, from its Date header (about 1 second precise)."""
+    try:
+        before = time.time()
+        resp = page.request.head(url, timeout=10000)
+        after = time.time()
+        server = email.utils.parsedate_to_datetime(resp.headers["date"]).timestamp()
+        return server + 0.5 - (before + after) / 2
+    except Exception:
+        return 0.0
+
+
+MAX_RACE_TABS = 6
+
+
+def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
+    """Midnight mode for one day that is about to open.
+
+    Signs in early and opens one tab per room and time choice, each filled in up to the
+    calendar. From just before open_at (by the portal's clock) every tab re-checks the
+    calendar together, and the first choice that shows the day as free is booked.
+    """
+    from playwright.sync_api import sync_playwright
+    steps = recipe.get("book", [])
+    cut = next((i for i, s in enumerate(steps) if s.get("race_start")), None)
+    race = recipe.get("race") or {}
+    result = {"date": day.isoformat(), "slot": storage.slot_key(slot), "room": None, "race": True,
+              "status": "unavailable", "message": "Midnight mode: none of your choices opened up."}
+    if cut is None or not race.get("ready"):
+        result.update(status="error", message="This version of the booking steps has no midnight mode.")
+        return result
+    prepare, grab = steps[:cut], steps[cut:]
+    times = slot.get("times") or storage.slot_times(slot)
+    options = [(r, t) for r in settings["rooms"] for t in times][:MAX_RACE_TABS]
+    poll = int(settings.get("race_poll_ms", 1500)) / 1000
+    window = int(settings.get("race_window_seconds", 120))
+    base = _base_ctx(settings, password)
+    notes = []
+
+    with sync_playwright() as p:
+        browser = _launch(p, settings.get("show_browser"))
+        context = browser.new_context()
+        first = context.new_page()
+        ok, msg = _login(first, recipe, base, password)
+        if not ok:
+            result.update(status="login_failed", message=msg, screenshot=_shot(first, "race_login_failed"))
+            browser.close()
+            return result
+        offset = _clock_offset(first, race.get("clock_url", "https://booking.carleton.ca/"))
+
+        tabs = []
+        for i, (room, (start_text, end_text)) in enumerate(options):
+            page = first if i == 0 else context.new_page()
+            ctx = _ctx(base, recipe, day, room, start_text, end_text)
+            label = f"{room} {start_text}-{end_text}"
+            try:
+                run_steps(page, prepare, ctx)
+                tabs.append({"page": page, "ctx": ctx, "label": label, "room": room,
+                             "time": f"{start_text}-{end_text}", "alive": True})
+            except StepFailed as e:
+                notes.append(f"{label} could not get ready at '{_step_label(e)}'")
+        if not tabs:
+            result.update(status="error", message="Midnight mode: no choice got ready. " + "; ".join(notes),
+                          screenshot=_shot(first, f"{day}_race_prepare_failed"))
+            browser.close()
+            return result
+
+        # Wait on the page until 3 seconds before the portal's clock reaches the open time.
+        open_local = open_at.timestamp() - offset
+        already_open = time.time() >= open_local
+        while time.time() < open_local - 3:
+            first.wait_for_timeout(min(1000, max(50, (open_local - 3 - time.time()) * 1000)))
+
+        deadline = max(open_local, time.time()) + window
+        while time.time() < deadline and any(t["alive"] for t in tabs):
+            round_start = time.time()
+            for t in tabs:
+                if t["alive"]:
+                    try:
+                        run_steps(t["page"], race.get("refresh", []), t["ctx"])
+                    except StepFailed:
+                        pass
+            first.wait_for_timeout(min(700, poll * 1000))
+            for t in tabs:  # in order of preference
+                if not t["alive"]:
+                    continue
+                if t["page"].locator(_render(race["ready"], t["ctx"])).count() == 0:
+                    continue
+                try:
+                    outcome = run_steps(t["page"], grab, t["ctx"], dry_run=dry_run)
+                    after = time.time() + offset - open_at.timestamp()
+                    when = "(the day was already open)" if already_open else f"{max(after, 0):.1f} s after opening"
+                    shot = _shot(t["page"], f"{day}_race_{t['room']}_{outcome}")
+                    if outcome == "dry_run":
+                        result.update(room=t["room"], time=t["time"], status="dry_run", screenshot=shot,
+                                      message=f"Midnight mode dry run: {t['label']} was free {when}. Nothing was booked.")
+                    else:
+                        result.update(room=t["room"], time=t["time"], status="booked", screenshot=shot,
+                                      message=f"Midnight mode booked {t['label']} {when}.")
+                    browser.close()
+                    return result
+                except StepFailed as e:
+                    t["alive"] = False
+                    notes.append(f"{t['label']} " + ("was taken first" if e.outcome == "unavailable"
+                                                     else f"failed at '{_step_label(e)}'"))
+                    result["screenshot"] = _shot(t["page"], f"{day}_race_{t['room']}_{e.outcome}")
+            left = poll - (time.time() - round_start)
+            if left > 0:
+                first.wait_for_timeout(left * 1000)
+        if notes:
+            result["message"] += " " + "; ".join(notes) + "."
+        browser.close()
+    return result
+
+
 def run_bookings(settings, password, recipe, targets, dry_run=False):
     """targets: list of (date, slot). Returns one result per target."""
     from playwright.sync_api import sync_playwright
     results = []
-    date_fmt = recipe.get("date_format", "%Y-%m-%d")
-    time_fmt = recipe.get("time_format", "%H:%M")
     base = _base_ctx(settings, password)
 
     with sync_playwright() as p:
@@ -164,10 +299,6 @@ def run_bookings(settings, password, recipe, targets, dry_run=False):
             browser.close()
             return [{"status": "login_failed", "message": msg, "screenshot": shot}]
 
-        def fmt(t):
-            text = t.strftime(time_fmt)
-            return text.lstrip("0") if recipe.get("strip_leading_zero") else text
-
         for day, slot in targets:
             result = {"date": day.isoformat(), "slot": storage.slot_key(slot), "room": None,
                       "status": "unavailable", "message": "None of your rooms were free."}
@@ -175,15 +306,8 @@ def run_bookings(settings, password, recipe, targets, dry_run=False):
             # First room at each time in order, then the next room, and so on.
             times = slot.get("times") or storage.slot_times(slot)
             for room, (start_text, end_text) in [(r, t) for r in settings["rooms"] for t in times]:
-                start = dt.datetime.strptime(start_text, "%H:%M")
-                end = dt.datetime.strptime(end_text, "%H:%M")
                 label = f"{room} {start_text}-{end_text}"
-                ctx = dict(base, room=room, date=day.strftime(date_fmt), day=storage.DAYS[day.weekday()],
-                           room_number=room.split()[-1] if room.split() else room,
-                           date_epoch=calendar.timegm(day.timetuple()),
-                           start_min=start.hour * 60 + start.minute, end_min=end.hour * 60 + end.minute,
-                           duration_min=int((end - start).total_seconds() // 60),
-                           start=fmt(start), end=fmt(end))
+                ctx = _ctx(base, recipe, day, room, start_text, end_text)
                 try:
                     outcome = run_steps(page, recipe.get("book", []), ctx, dry_run=dry_run)
                     shot = _shot(page, f"{day}_{start_text}_{room}_{outcome}")

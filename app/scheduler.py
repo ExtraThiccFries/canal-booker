@@ -72,6 +72,20 @@ class Scheduler:
                                  "room": e.get("room") if e else None})
         return rows
 
+    def skip_passed_new_times(self, before, after):
+        """A newly added run time that already passed today starts tomorrow, instead of
+        counting as a missed run and booking right away."""
+        now = self.now()
+        today = now.date().isoformat()
+        new = [t for t in after if t not in before and now >= dt.datetime.combine(now.date(), _hm(t), TZ)]
+        if not new:
+            return
+        state = storage.load_state()
+        done = state.get("runs_done", {})
+        done_today = done.get("times", []) if done.get("date") == today else []
+        state["runs_done"] = {"date": today, "times": sorted(set(done_today) | set(new))}
+        storage.save_state(state)
+
     def _runs_due(self, s, now):
         """Run times today that have passed but have not run yet."""
         state = storage.load_state()
@@ -112,6 +126,16 @@ class Scheduler:
         if s["paused"] or not self.ready(s) or not storage.get_password(s["username"]):
             return
         now = self.now()
+        if self.run_lock.locked():  # a run is going; anything due starts on a later tick
+            return
+        if s.get("race"):
+            open_at = self.next_open(s, now)
+            state = storage.load_state()
+            if (open_at - now).total_seconds() <= int(s["race_lead_seconds"]) and state.get("race_done") != open_at.isoformat():
+                state["race_done"] = open_at.isoformat()
+                storage.save_state(state)
+                self.race(open_at)
+                return
         due = self._runs_due(s, now)
         if not due:
             return
@@ -129,6 +153,84 @@ class Scheduler:
             return {"ok": False, "message": "A booking run is already going."}
         try:
             return self._run(dry_run)
+        finally:
+            self.status = "Idle"
+            self.run_lock.release()
+
+    # ----- midnight mode -----
+
+    def next_open(self, s, now):
+        """The next time the portal opens a new day."""
+        at = dt.datetime.combine(now.date(), _hm(s.get("open_time", "00:00")), TZ)
+        return at if at > now else at + dt.timedelta(days=1)
+
+    def race_target(self, s, open_at):
+        """The (day, slot) that opens at open_at, if you have a slot that day and it is not booked yet."""
+        day = open_at.date() + dt.timedelta(days=int(s["days_ahead"]))
+        if day.isoformat() in storage.booked_dates():
+            return None
+        for slot in s["slots"]:
+            if slot.get("enabled", True) and storage.DAYS[day.weekday()] == slot["day"]:
+                return day, dict(slot, times=storage.slot_times(slot))
+        return None
+
+    def next_race(self, s):
+        if s["paused"] or not s.get("race") or not self.ready(s):
+            return None
+        open_at = self.next_open(s, self.now())
+        target = self.race_target(s, open_at)
+        return {"open_at": open_at.isoformat(timespec="seconds"), "date": target[0].isoformat()} if target else None
+
+    def race(self, open_at):
+        """Midnight mode for the day that opens at open_at, then a normal run for anything left."""
+        if not self.run_lock.acquire(blocking=False):
+            return
+        try:
+            s = storage.load_settings()
+            password = storage.get_password(s["username"])
+            target = self.race_target(s, open_at)
+            if not target or not password:
+                return
+            storage.refresh_recipe(s)
+            recipe = storage.load_recipe()
+            day, slot = target
+            self.status = f"Midnight mode: signed in and waiting for {day:%a %b %d} to open"
+            try:
+                result = booker.race_booking(s, password, recipe, day, slot, open_at)
+            except Exception as e:
+                result = {"date": day.isoformat(), "slot": storage.slot_key(slot), "race": True,
+                          "status": "error", "message": f"Midnight mode problem: {str(e)[:300]}"}
+            storage.add_log(result)
+            if result["status"] not in ("booked", "login_failed"):
+                self._run(False)  # normal retries, and any earlier days still open
+        finally:
+            self.status = "Idle"
+            self.run_lock.release()
+
+    def race_test(self):
+        """Try midnight mode right now on your next open day, as a dry run."""
+        if not self.run_lock.acquire(blocking=False):
+            return
+        try:
+            s = storage.load_settings()
+            password = storage.get_password(s["username"])
+            if not self.ready(s) or not password:
+                storage.add_log({"status": "error", "message": "Finish steps 1 to 3 and save your password first."})
+                return
+            now = self.now()
+            targets = self.pending_targets(s, now)[:1] or self._any_target(s)
+            if not targets:
+                storage.add_log({"status": "error", "message": "No slot to test midnight mode on."})
+                return
+            day, slot = targets[0]
+            self.status = "Testing midnight mode (dry run)"
+            recipe = storage.load_recipe()
+            try:
+                result = booker.race_booking(s, password, recipe, day, slot, now, dry_run=True)
+            except Exception as e:
+                result = {"date": day.isoformat(), "slot": storage.slot_key(slot), "race": True,
+                          "status": "error", "message": f"Midnight mode problem: {str(e)[:300]}"}
+            storage.add_log(result)
         finally:
             self.status = "Idle"
             self.run_lock.release()

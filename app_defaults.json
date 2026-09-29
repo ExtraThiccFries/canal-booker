@@ -1,5 +1,8 @@
 {
-  "team_plan_url": "https://github.com/silix54/canal-booker/blob/main/schedule.json",
-  "book_times": ["00:00"],
+  "team_plan_url": "https://docs.google.com/spreadsheets/d/1Bw9NATwD5yfoEZxQlj4F8TjOjb3J3PsbcSLsIwSCpQg/edit",
+  "recipe_url": "https://github.com/silix54/canal-booker/blob/main/portal_recipe.json",
+  "race": true,
+  "open_time": "00:00",
+  "book_times": ["00:05"],
   "retry_every_seconds": 30
 }
