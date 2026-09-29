@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "verified": true,
+  "notes": "Mapped on the live portal 2026-09-29: Self Service > Book a Specific Room > Group Study Spaces > room > duration/time window > Verify Calendar > date > Book > Confirm > OK popup. A dry run stops before the final OK, so nothing is booked. Verified end to end 2026-09-29 (real booking #152358 succeeded). Rooms must be named like 'CB 2103'; bookable Canal Building study rooms are CB 2103, 2302, 3102, 3201, 3208.",
+  "date_format": "%Y-%m-%d",
+  "time_format": "%I:%M %p",
+  "strip_leading_zero": true,
+  "login": [
+    {"action": "goto", "url": "https://booking.carleton.ca/index.php?p=Index"},
+    {"action": "click", "selector": "#spanLogin", "note": "Open the sign-in box"},
+    {"action": "fill", "selector": "#txtUsername", "value": "{username}", "note": "Type username"},
+    {"action": "fill", "selector": "#txtPassword", "value": "{password}", "note": "Type password"},
+    {"action": "click", "selector": "#btnLogin", "note": "Click Sign In"},
+    {"action": "expect", "selector": "#spanUsername", "timeout": 20000, "on_fail": "login_failed", "note": "Confirm signed in (username shows in the top bar)"}
+  ],
+  "book": [
+    {"action": "goto", "url": "https://booking.carleton.ca/index.php?p=BookRoom&r=1", "note": "Open Book a Specific Room"},
+    {"action": "select", "selector": "#cboRequestType", "value": "Group Study Spaces", "note": "Booking type: Group Study Spaces"},
+    {"action": "click", "selector": "tr.ClickableRow:has(td:text-is('CB')):has(td:text-is('{room_number}')) >> td >> nth=0", "timeout": 15000, "on_fail": "error", "note": "Select the room in the list"},
+    {"action": "select", "selector": "#cboDuration", "value": "{duration_min}", "by": "value", "note": "Set duration"},
+    {"action": "select", "selector": "#cboStartTime", "value": "{start_min}", "by": "value", "note": "Set 'Between' start time"},
+    {"action": "select", "selector": "#cboEndTime", "value": "{end_min}", "by": "value", "note": "Set 'and' end time"},
+    {"action": "click", "selector": "#btnAnyDate", "note": "Verify Calendar"},
+    {"action": "click", "selector": "td.dayAvailable:has(#day{date_epoch})", "timeout": 10000, "on_fail": "unavailable", "note": "Pick the date (only works if the room is free then)"},
+    {"action": "click", "selector": "tr:has(td:text-is('{start}')) input[value='Book']", "timeout": 10000, "on_fail": "unavailable", "note": "Click Book next to the start time (opens the confirmation page, does not book yet)"},
+    {"action": "click", "selector": ".MessageBoxWindow #btnOK", "optional": true, "timeout": 2000, "note": "Close an info popup if one appears"},
+    {"action": "click", "selector": "#btnConfirm", "timeout": 20000, "note": "Click Confirm on the Booking Confirmation page (opens the final OK popup)"},
+    {"action": "click", "selector": ".MessageBoxWindow:has-text('confirm this booking') #btnOK", "submit": true, "note": "Click OK in 'Select OK to confirm this booking.' (this makes the booking)"},
+    {"action": "expect", "selector": ".MessageBoxText:has-text('Booking saved successfully')", "timeout": 20000, "note": "Portal says 'Booking saved successfully. (Booking #...)'"}
+  ]
+}

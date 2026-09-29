@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canal Booker</title>
+<style>
+  :root {
+    --bg: #f5f4f1; --card: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e3e1dc;
+    --accent: #b3122e; --accent-soft: #fbe9ec; --ok: #1f7a4d; --ok-soft: #e4f4ea;
+    --warn: #8a5a00; --warn-soft: #fff4dc; --bad: #b3122e; --bad-soft: #fbe9ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151517; --card: #1f1f22; --ink: #f0efe9; --muted: #a09fa6; --line: #333338;
+      --accent: #ff5a6e; --accent-soft: #3a1d22; --ok: #5fd39a; --ok-soft: #173326;
+      --warn: #f2c14e; --warn-soft: #3a3016; --bad: #ff6b7a; --bad-soft: #3a1d22; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { background: var(--card); border-bottom: 1px solid var(--line); padding: 18px 16px; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 16px; }
+  header .wrap { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 0; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  h1 span { color: var(--accent); }
+  h2 { font-size: 16px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  main { padding: 20px 0 60px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; width: 100%; }
+  input[type=checkbox] { width: auto; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.small { padding: 4px 9px; font-size: 13px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 99px; background: var(--ok-soft); color: var(--ok); white-space: nowrap; }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.bad { background: var(--bad-soft); color: var(--bad); }
+  .pill.grey { background: var(--bg); color: var(--muted); }
+  .banner { border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; background: var(--warn-soft); color: var(--warn); font-size: 14px; }
+  ol.rooms { list-style: none; padding: 0; margin: 0 0 10px; counter-reset: r; }
+  ol.rooms li { counter-increment: r; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; background: var(--bg); }
+  ol.rooms li::before { content: counter(r); font-weight: 600; color: var(--accent); width: 18px; }
+  ol.rooms li .name { flex: 1; }
+  .slot { display: grid; grid-template-columns: 80px 1fr 1fr 2.2fr auto auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .slot-head { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  @media (max-width: 560px) { .slot { grid-template-columns: 1fr 1fr; } .slot-head { display: none; } }
+  .runtime { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .empty { color: var(--muted); font-size: 14px; padding: 6px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .scroll { overflow-x: auto; }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+    padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: 92vw; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  a { color: var(--accent); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div>
+      <h1>Canal <span>Booker</span></h1>
+      <div class="sub" style="margin:0" id="statusLine">Loading…</div>
+    </div>
+    <div class="row">
+      <button id="dryBtn">Dry run</button>
+      <button class="primary" id="runBtn">Book now</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="banner" id="recipeBanner" hidden>
+    The booking steps have not been confirmed on the real portal yet. Use <b>Dry run</b> first. It goes through every step
+    except the final button, and saves screenshots so you can see what happened.
+  </div>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>1. Your Carleton sign-in</h2>
+      <p class="sub">Your MyCarletonOne username, without @carleton.ca. The password stays in this computer's secure storage.</p>
+      <label for="username">Username</label>
+      <input id="username" autocomplete="username" placeholder="firstnamelastname">
+      <label for="password">Password <span id="pwState" class="pill grey">not saved</span></label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="Type to save or change">
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="saveLoginBtn">Save sign-in</button>
+        <button id="testLoginBtn">Test sign-in</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>2. Rooms, in order of preference</h2>
+      <p class="sub">The booker tries your first choice, then the next one if it is taken.</p>
+      <ol class="rooms" id="roomList"></ol>
+      <div class="row">
+        <input id="newRoom" placeholder="Room name, e.g. CB 2201" style="flex:1">
+        <button id="addRoomBtn">Add</button>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>3. Your time slots</h2>
+    <p class="sub">One booking per day, 3 hours at most. Backup times are tried in order if the main time is taken, for example
+      <code>09:00-12:00, 15:00-18:00</code>. Each room from step 2 is tried at every time before moving to the next room.</p>
+    <div id="slotList"></div>
+    <button id="addSlotBtn">+ Add a day</button>
+  </section>
+
+  <div class="row" style="justify-content:flex-end;margin:-4px 0 16px">
+    <span class="sub" style="margin:0" id="dirtyNote"></span>
+    <button class="primary" id="saveBtn">Save changes</button>
+  </div>
+
+  <section class="card">
+    <h2>Coming up</h2>
+    <p class="sub">Each day opens at midnight <span id="aheadText">7</span> days before. The booker runs at your run times (see Settings).</p>
+    <div class="scroll"><table><thead><tr><th>Date</th><th>Time</th><th>Status</th><th>Room</th></tr></thead>
+      <tbody id="upcoming"></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <h2>Team plan</h2>
+    <p class="sub">Paste the link to schedule.json in your group's GitHub repo to see who covers which slot and copy yours in.</p>
+    <div class="row">
+      <input id="teamUrl" placeholder="https://github.com/…/schedule.json" style="flex:1">
+      <button id="loadTeamBtn">Load</button>
+      <button id="importTeamBtn">Use my slots from it</button>
+    </div>
+    <div class="scroll" id="teamTable" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Activity</h2>
+    <div class="scroll"><table><thead><tr><th>When</th><th>For</th><th>Result</th><th>Details</th></tr></thead>
+      <tbody id="log"></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Settings</summary>
+      <div class="grid2">
+        <div>
+          <label>Run the booker at (Ottawa time)</label>
+          <div id="runTimes"></div>
+          <button class="small" id="addRunTimeBtn">+ Add a time</button>
+          <label for="days_ahead">Days ahead the portal opens</label>
+          <input id="days_ahead" type="number" min="1" max="14">
+          <label for="retry_minutes">Keep retrying for (minutes)</label>
+          <input id="retry_minutes" type="number" min="0" max="120">
+          <label for="retry_every_seconds">Retry every (seconds)</label>
+          <input id="retry_every_seconds" type="number" min="30" max="600">
+        </div>
+        <div>
+          <label for="event_title">Booking name</label>
+          <input id="event_title">
+          <label for="attendees">Number of people</label>
+          <input id="attendees" type="number" min="1" max="50">
+          <label><input type="checkbox" id="show_browser"> Show the browser while booking</label>
+          <label><input type="checkbox" id="paused"> Pause automatic booking</label>
+          <label><input type="checkbox" id="autostart"> Start Canal Booker when this computer starts</label>
+        </div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="saveSettingsBtn">Save settings</button>
+        <button id="quitBtn">Stop Canal Booker</button>
+      </div>
+    </details>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const TOKEN = "__TOKEN__";
+let DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+let rooms = [], slots = [], dirty = false, loaded = false;
+const $ = id => document.getElementById(id);
+
+async function api(path, body) {
+  const opts = { headers: { "X-Token": TOKEN, "Content-Type": "application/json" } };
+  if (body !== undefined) { opts.method = "POST"; opts.body = JSON.stringify(body); }
+  const r = await fetch("/api/" + path, opts);
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok && data.message === undefined) data.message = "Something went wrong (" + r.status + ").";
+  return data;
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 4500); }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function markDirty() { dirty = true; $("dirtyNote").textContent = "Unsaved changes"; }
+function fmtTime(t) { if (!t) return ""; let [h, m] = t.split(":").map(Number);
+  const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12; return h + (m ? ":" + String(m).padStart(2, "0") : "") + ap; }
+function fmtDate(d) { return new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); }
+const STATUS = { booked: ["Booked", ""], dry_run: ["Dry run OK", "warn"], unavailable: ["Taken", "bad"],
+  error: ["Problem", "bad"], login_failed: ["Sign-in failed", "bad"], waiting: ["Waiting", "grey"] };
+function pill(s) { const [t, c] = STATUS[s] || [s, "grey"]; return `<span class="pill ${c}">${esc(t)}</span>`; }
+
+function renderRooms() {
+  $("roomList").innerHTML = rooms.length ? rooms.map((r, i) => `<li><span class="name">${esc(r)}</span>
+    <button class="small" data-up="${i}" ${i === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+    <button class="small" data-down="${i}" ${i === rooms.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
+    <button class="small" data-del="${i}" aria-label="Remove">✕</button></li>`).join("")
+    : `<div class="empty">No rooms yet. Add your first choice below.</div>`;
+}
+$("roomList").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const d = b.dataset;
+  if (d.up) { const i = +d.up; [rooms[i - 1], rooms[i]] = [rooms[i], rooms[i - 1]]; }
+  if (d.down) { const i = +d.down; [rooms[i + 1], rooms[i]] = [rooms[i], rooms[i + 1]]; }
+  if (d.del) rooms.splice(+d.del, 1);
+  renderRooms(); markDirty();
+});
+function addRoom() { const v = $("newRoom").value.trim(); if (!v) return;
+  if (!rooms.includes(v)) rooms.push(v); $("newRoom").value = ""; renderRooms(); markDirty(); }
+$("addRoomBtn").onclick = addRoom;
+$("newRoom").addEventListener("keydown", e => { if (e.key === "Enter") addRoom(); });
+
+function altsText(s) { return s.altsText ?? (s.alts || []).map(a => a.start + "-" + a.end).join(", "); }
+function parseAlts(text, day) {
+  const parts = String(text || "").split(",").map(p => p.trim()).filter(Boolean);
+  return parts.map(p => {
+    const m = p.match(/^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/);
+    if (!m) throw new Error(`${day}: backup time "${p}" should look like 09:00-12:00.`);
+    const pad = t => t.padStart(5, "0");
+    return { start: pad(m[1]), end: pad(m[2]) };
+  });
+}
+function renderSlots() {
+  $("slotList").innerHTML = slots.length ? `<div class="slot slot-head"><span>Day</span><span>Start</span><span>End</span>
+    <span>Backup times</span><span></span><span></span></div>` + slots.map((s, i) => `<div class="slot">
+    <select data-i="${i}" data-k="day">${DAYS.map(d => `<option ${d === s.day ? "selected" : ""}>${d}</option>`).join("")}</select>
+    <input type="time" step="1800" data-i="${i}" data-k="start" value="${esc(s.start)}" aria-label="Start">
+    <input type="time" step="1800" data-i="${i}" data-k="end" value="${esc(s.end)}" aria-label="End">
+    <input data-i="${i}" data-k="altsText" value="${esc(altsText(s))}" placeholder="09:00-12:00, 15:00-18:00" aria-label="Backup times">
+    <label style="margin:0"><input type="checkbox" data-i="${i}" data-k="enabled" ${s.enabled !== false ? "checked" : ""}> On</label>
+    <button class="small" data-del="${i}" aria-label="Remove">✕</button></div>`).join("")
+    : `<div class="empty">No time slots yet.</div>`;
+}
+$("slotList").addEventListener("input", e => { const el = e.target; if (el.dataset.i === undefined) return;
+  slots[+el.dataset.i][el.dataset.k] = el.type === "checkbox" ? el.checked : el.value; markDirty(); });
+$("slotList").addEventListener("click", e => { const b = e.target.closest("button[data-del]"); if (!b) return;
+  slots.splice(+b.dataset.del, 1); renderSlots(); markDirty(); });
+$("addSlotBtn").onclick = () => { const used = slots.map(s => s.day);
+  slots.push({ day: DAYS.find(d => !used.includes(d)) || "Mon", start: "09:00", end: "12:00", enabled: true });
+  renderSlots(); markDirty(); };
+
+async function saveMain() {
+  let clean;
+  try {
+    clean = slots.map(s => { const { altsText: _, ...rest } = s; return { ...rest, alts: parseAlts(altsText(s), s.day) }; });
+  } catch (e) { toast(e.message); return false; }
+  const r = await api("settings", { username: $("username").value, rooms, slots: clean, team_plan_url: $("teamUrl").value });
+  toast(r.message); if (r.ok) { dirty = false; $("dirtyNote").textContent = ""; refresh(true); }
+  return r.ok;
+}
+$("saveBtn").onclick = saveMain;
+
+$("saveLoginBtn").onclick = async () => {
+  const r = await api("settings", { username: $("username").value });
+  if (!r.ok) return toast(r.message);
+  if ($("password").value) { const p = await api("password", { password: $("password").value }); $("password").value = ""; toast(p.message); }
+  else toast("Username saved.");
+  refresh();
+};
+$("testLoginBtn").onclick = async () => {
+  const b = $("testLoginBtn"); b.disabled = true; b.textContent = "Testing…";
+  const r = await api("test-login", {});
+  b.disabled = false; b.textContent = "Test sign-in";
+  toast(r.message + (r.screenshot ? " (screenshot saved)" : ""));
+  if (r.screenshot) window.open("/shots/" + encodeURIComponent(r.screenshot) + "?t=" + TOKEN, "_blank");
+};
+
+async function startRun(dry) {
+  if (dirty && !(await saveMain())) return;
+  const r = await api("run", { dry_run: dry }); toast(r.message); refresh();
+}
+$("runBtn").onclick = () => startRun(false);
+$("dryBtn").onclick = () => startRun(true);
+
+$("loadTeamBtn").onclick = async () => {
+  await api("settings", { team_plan_url: $("teamUrl").value });
+  const r = await api("team");
+  if (!r.ok) { $("teamTable").innerHTML = ""; return toast(r.message); }
+  const p = r.plan || {};
+  const rows = (p.people || []).flatMap(person => (person.slots || []).map(s => ({ ...s, who: person.name || person.username })));
+  rows.sort((a, b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || a.start.localeCompare(b.start));
+  $("teamTable").innerHTML = `<p class="sub" style="margin:0 0 8px">Shared rooms: ${esc((p.rooms || []).join(", ") || "none listed")}</p>
+    <table><thead><tr><th>Day</th><th>Time</th><th>Who books it</th></tr></thead><tbody>${
+    rows.map(s => `<tr><td>${esc(s.day)}</td><td>${fmtTime(s.start)} to ${fmtTime(s.end)}</td><td>${esc(s.who)}</td></tr>`).join("")
+    || `<tr><td colspan="3" class="empty">No slots in the plan yet.</td></tr>`}</tbody></table>`;
+};
+$("importTeamBtn").onclick = async () => {
+  await api("settings", { username: $("username").value, team_plan_url: $("teamUrl").value });
+  const r = await api("team/import", {}); toast(r.message); if (r.ok) refresh(true);
+};
+
+let runTimes = [];
+function renderRunTimes() {
+  $("runTimes").innerHTML = runTimes.map((t, i) => `<div class="runtime">
+    <input type="time" data-rt="${i}" value="${esc(t)}" aria-label="Run time ${i + 1}">
+    <button class="small" data-rtdel="${i}" aria-label="Remove" ${runTimes.length === 1 ? "disabled" : ""}>✕</button></div>`).join("");
+}
+$("runTimes").addEventListener("input", e => { const i = e.target.dataset.rt; if (i !== undefined) runTimes[+i] = e.target.value; });
+$("runTimes").addEventListener("click", e => { const b = e.target.closest("button[data-rtdel]"); if (!b) return;
+  runTimes.splice(+b.dataset.rtdel, 1); renderRunTimes(); });
+$("addRunTimeBtn").onclick = () => { runTimes.push("12:00"); renderRunTimes(); };
+
+$("saveSettingsBtn").onclick = async () => {
+  const body = { book_times: runTimes.filter(Boolean), days_ahead: +$("days_ahead").value, retry_minutes: +$("retry_minutes").value,
+    retry_every_seconds: +$("retry_every_seconds").value,
+    event_title: $("event_title").value, attendees: +$("attendees").value,
+    show_browser: $("show_browser").checked, paused: $("paused").checked };
+  const r = await api("settings", body); toast(r.message); refresh();
+};
+$("autostart").onchange = async e => { const r = await api("autostart", { enabled: e.target.checked });
+  toast(r.ok ? (r.enabled ? "Canal Booker will start with this computer." : "Start with computer turned off.") : r.message); refresh(); };
+$("quitBtn").onclick = async () => { if (!confirm("Stop Canal Booker? Nothing will be booked until you open it again.")) return;
+  const r = await api("quit", {}); document.body.innerHTML = `<main class="wrap"><div class="card" style="margin-top:40px">${esc(r.message)}</div></main>`; };
+
+async function refresh(forceForm) {
+  const s = await api("state"); if (!s.settings) return;
+  DAYS = s.days || DAYS;
+  const st = s.settings;
+  if (!loaded || forceForm || !dirty) {
+    if (!loaded || forceForm) {
+      rooms = [...st.rooms]; slots = st.slots.map(x => ({ ...x }));
+      $("username").value = st.username; $("teamUrl").value = st.team_plan_url || "";
+      for (const k of ["days_ahead", "retry_minutes", "retry_every_seconds", "event_title", "attendees"]) $(k).value = st[k];
+      runTimes = [...(st.book_times && st.book_times.length ? st.book_times : [st.book_time])]; renderRunTimes();
+      $("show_browser").checked = st.show_browser; $("paused").checked = st.paused;
+      renderRooms(); renderSlots(); loaded = true;
+    }
+  }
+  $("autostart").checked = s.autostart;
+  $("aheadText").textContent = st.days_ahead;
+  $("pwState").textContent = s.has_password ? "saved" : "not saved";
+  $("pwState").className = "pill " + (s.has_password ? "" : "grey");
+  $("recipeBanner").hidden = s.recipe_verified;
+  $("runBtn").disabled = $("dryBtn").disabled = s.busy;
+  let line;
+  if (s.busy) line = s.status + "…";
+  else if (st.paused) line = "Paused. Nothing will be booked automatically.";
+  else if (!st.username || !s.has_password || !st.rooms.length || !st.slots.length) line = "Finish steps 1 to 3 to start booking.";
+  else line = "Running. Next booking run " + new Date(s.next_run).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }) + ".";
+  $("statusLine").textContent = line;
+
+  $("upcoming").innerHTML = s.upcoming.map(u => `<tr><td>${fmtDate(u.date)}</td><td>${fmtTime(u.start)} to ${fmtTime(u.end)}</td>
+    <td>${pill(u.status)}</td><td>${esc(u.room || "")}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="empty">Nothing scheduled yet.</td></tr>`;
+  $("log").innerHTML = s.log.map(e => `<tr><td>${esc(new Date(e.ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}</td>
+    <td>${e.date ? fmtDate(e.date) + "<br><span class='sub'>" + esc(e.time ? e.slot.split(" ")[0] + " " + e.time : (e.slot || "")) + "</span>" : ""}</td><td>${pill(e.status)}</td>
+    <td>${esc(e.message)}${e.screenshot ? ` <a target="_blank" href="/shots/${encodeURIComponent(e.screenshot)}?t=${TOKEN}">screenshot</a>` : ""}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="empty">No activity yet.</td></tr>`;
+}
+refresh(true);
+setInterval(() => refresh(false), 5000);
+</script>
+</body>
+</html>

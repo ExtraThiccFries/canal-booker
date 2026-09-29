@@ -1,0 +1,21 @@
+{
+  "rooms": ["CB 0000", "CB 0001"],
+  "people": [
+    {
+      "name": "Silas",
+      "username": "silasusername",
+      "slots": [
+        {"day": "Mon", "start": "09:00", "end": "12:00"},
+        {"day": "Wed", "start": "09:00", "end": "12:00"}
+      ]
+    },
+    {
+      "name": "Friend 2",
+      "username": "friendusername",
+      "slots": [
+        {"day": "Mon", "start": "12:00", "end": "15:00"},
+        {"day": "Wed", "start": "12:00", "end": "15:00"}
+      ]
+    }
+  ]
+}
