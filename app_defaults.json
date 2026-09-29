@@ -1,5 +1,5 @@
 {
-  "team_plan_url": "",
+  "team_plan_url": "https://github.com/silix54/canal-booker/blob/main/schedule.json",
   "book_times": ["00:00"],
   "retry_every_seconds": 30
 }
