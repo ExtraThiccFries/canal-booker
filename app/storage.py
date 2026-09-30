@@ -48,6 +48,7 @@ DEFAULT_SETTINGS = {
     "attendees": 4,
     "team_plan_url": "",    # Google Sheet link or schedule.json link
     "recipe_url": "",       # where booking-step updates come from (portal_recipe.json on GitHub)
+    "status_url": "",       # the team sheet's Apps Script web app; results show in its Status tab
     "race": True,           # midnight mode: sign in early, wait on the page, book the second the day opens
     "open_time": "00:00",   # when the portal opens a new day
     "race_lead_seconds": 150,    # how early to sign in and get the forms ready
@@ -277,6 +278,44 @@ def fetch_plan(url: str) -> dict:
         raise ValueError("Google did not share the sheet. In the sheet, click Share and set General access "
                          "to 'Anyone with the link' (Viewer).")
     return parse_plan_csv(text)
+
+
+def shared_defaults(settings: dict) -> dict:
+    """app_defaults.json from the main repo (next to recipe_url). Forks and older downloads
+    use it to pick up shared links added later, such as status_url."""
+    url = settings.get("recipe_url", "")
+    if not url:
+        return {}
+    try:
+        data = fetch_json(to_raw_url(url).rsplit("/", 1)[0] + "/app_defaults.json")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+RESULT_TEXT = {"booked": "Booked", "dry_run": "Test passed", "unavailable": "Not booked",
+               "login_failed": "Sign-in failed", "error": "Not booked (problem)"}
+
+
+def post_status(settings: dict, entry: dict, source: str, name: str = "", url: str = "") -> bool:
+    """Add a row to the Status tab of the team sheet (through its Apps Script web app).
+    Sends the username, date, room, time and result. Never the password."""
+    url = url or settings.get("status_url") or shared_defaults(settings).get("status_url", "")
+    if not url or not settings.get("username"):
+        return False
+    payload = {
+        "username": settings["username"], "name": name,
+        "date": entry.get("date", ""), "room": entry.get("room") or "", "time": entry.get("time") or "",
+        "result": entry.get("result") or RESULT_TEXT.get(entry.get("status"), entry.get("status", "")),
+        "details": entry.get("message", ""), "source": source,
+    }
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST",
+                                     headers={"Content-Type": "application/json", "User-Agent": "CanalBooker"})
+        with urllib.request.urlopen(req, timeout=20, context=_SSL) as r:
+            return r.read(200).decode("utf-8", "replace").strip() == "ok"
+    except Exception:
+        return False
 
 
 def load_recipe() -> dict:

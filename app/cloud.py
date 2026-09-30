@@ -32,13 +32,18 @@ def log(msg):
     print(f"[{dt.datetime.now(TZ):%H:%M:%S}] {msg}", flush=True)
 
 
-def summary(title, detail=""):
-    """Show the result at the top of the run's page on GitHub (the job summary)."""
+def summary(title, detail="", s=None, result=None, **entry):
+    """Show the result at the top of the run's page on GitHub (the job summary) and,
+    when `result` is given, add it to the Status tab of the team sheet."""
     log(f"{title} {detail}".strip())
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"## {title}\n\n{detail}\n\n_{dt.datetime.now(TZ):%a %b %d, %I:%M %p} Ottawa time_\n")
+    if s is not None and result:
+        entry = dict(entry, result=result, message=detail)
+        if storage.post_status(s, entry, "Cloud", name=s.get("_name", ""), url=os.environ.get("STATUS_URL", "")):
+            log("Added to the Status tab.")
 
 
 def settings_from_env():
@@ -48,6 +53,7 @@ def settings_from_env():
         return None, None, "Add the CARLETON_USERNAME and CARLETON_PASSWORD secrets first (see the setup steps)."
     s = storage.load_settings()
     s["username"] = user
+    s["_name"] = user
     plan_url = os.environ.get("TEAM_PLAN_URL", "").strip() or s.get("team_plan_url", "")
     if not plan_url:
         return None, None, "No team plan link. Set the TEAM_PLAN_URL variable."
@@ -58,6 +64,7 @@ def settings_from_env():
     me = next((p for p in plan.get("people", []) if p.get("username", "").lower() == user.lower()), None)
     if not me or not me.get("slots"):
         return None, None, f"'{user}' has no rows in the team plan yet. Add your rows to the sheet."
+    s["_name"] = me.get("name") or user
     rooms = [r.strip() for r in os.environ.get("ROOMS", "").split(",") if r.strip()]
     s["rooms"] = rooms or me.get("rooms") or plan.get("rooms") or []
     if not s["rooms"]:
@@ -107,11 +114,14 @@ def book(s, password, recipe):
 
     result = booker.race_booking(s, password, recipe, day, slot, open_at)
     log(result["message"])
+    when = {"date": day.isoformat()}
     if result["status"] == "booked":
-        summary(f"✅ Booked {day:%a %b %d}", result["message"])
+        summary(f"✅ Booked {day:%a %b %d}", result["message"], s, "Booked",
+                room=result.get("room"), time=result.get("time"), **when)
         return 0
     if result["status"] == "login_failed":
-        summary("❌ Sign-in failed", result["message"] + " Update the CARLETON_PASSWORD secret if your password changed.")
+        summary("❌ Sign-in failed", result["message"] + " Update the CARLETON_PASSWORD secret if your password changed.",
+                s, "Sign-in failed", **when)
         return 1
 
     # Nothing opened up in midnight mode: keep retrying the normal way for a while.
@@ -122,13 +132,15 @@ def book(s, password, recipe):
         r = results[0] if results else {"status": "error", "message": "The browser returned nothing."}
         log(r["message"])
         if r["status"] == "booked":
-            summary(f"✅ Booked {day:%a %b %d}", r["message"] + " (on a retry after midnight)")
+            summary(f"✅ Booked {day:%a %b %d}", r["message"] + " (on a retry after midnight)", s, "Booked",
+                    room=r.get("room"), time=r.get("time"), **when)
             return 0
         if r["status"] == "login_failed":
-            summary("❌ Sign-in failed", r["message"])
+            summary("❌ Sign-in failed", r["message"], s, "Sign-in failed", **when)
             return 1
     summary(f"❌ Not booked: {day:%a %b %d}",
-            f"{result['message']} Retried for {s.get('retry_minutes', 20)} minutes. Book by hand on the portal if you still need it.")
+            f"{result['message']} Retried for {s.get('retry_minutes', 20)} minutes. Book by hand on the portal if you still need it.",
+            s, "Not booked", **when)
     return 1
 
 
@@ -146,13 +158,15 @@ def test(s, password, recipe):
         result = booker.race_booking(s, password, recipe, day, slot, dt.datetime.now(TZ), dry_run=True)
         log(result["message"])
         if result["status"] == "dry_run":
-            summary("✅ Test passed", result["message"])
+            summary("✅ Test passed", result["message"], s, "Test passed",
+                    date=day.isoformat(), room=result.get("room"), time=result.get("time"))
             return 0
         if result["status"] != "unavailable" or tried >= 3:
-            summary("❌ Test failed", result["message"])
+            summary("❌ Test failed", result["message"], s, "Test failed", date=day.isoformat())
             return 1
     summary("✅ Test passed (sign-in and form steps work)",
-            "Every choice was full, or you already have bookings, on the days tried, so it could not reach the last step.")
+            "Every choice was full, or you already have bookings, on the days tried, so it could not reach the last step.",
+            s, "Test passed")
     return 0
 
 
@@ -163,7 +177,8 @@ def main():
         pass
     s, password, problem = settings_from_env()
     if problem:
-        summary("❌ Not set up", problem)
+        base = dict(storage.load_settings(), username=os.environ.get("CARLETON_USERNAME", "").strip().split("@")[0])
+        summary("❌ Not set up", problem, base if base["username"] else None, "Not set up")
         return 1
     storage.refresh_recipe(s)
     recipe = storage.load_recipe()

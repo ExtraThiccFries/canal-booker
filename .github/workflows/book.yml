@@ -43,5 +43,6 @@ jobs:
           CARLETON_PASSWORD: ${{ secrets.CARLETON_PASSWORD }}
           TEAM_PLAN_URL: ${{ vars.TEAM_PLAN_URL }}
           ROOMS: ${{ vars.ROOMS }}
+          STATUS_URL: ${{ vars.STATUS_URL }}
           MODE: ${{ inputs.mode || 'book' }}
         run: python -m app.cloud

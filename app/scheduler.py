@@ -201,8 +201,12 @@ class Scheduler:
                 result = {"date": day.isoformat(), "slot": storage.slot_key(slot), "race": True,
                           "status": "error", "message": f"Midnight mode problem: {str(e)[:300]}"}
             storage.add_log(result)
-            if result["status"] not in ("booked", "login_failed"):
+            if result["status"] in ("booked", "login_failed"):
+                storage.post_status(s, result, "Computer")
+            else:
                 self._run(False)  # normal retries, and any earlier days still open
+                if day.isoformat() not in storage.booked_dates():
+                    storage.post_status(s, result, "Computer")
         finally:
             self.status = "Idle"
             self.run_lock.release()
@@ -231,6 +235,7 @@ class Scheduler:
                 result = {"date": day.isoformat(), "slot": storage.slot_key(slot), "race": True,
                           "status": "error", "message": f"Midnight mode problem: {str(e)[:300]}"}
             storage.add_log(result)
+            storage.post_status(s, result, "Computer (test)")
         finally:
             self.status = "Idle"
             self.run_lock.release()
@@ -278,6 +283,8 @@ class Scheduler:
 
         for r in final.values():
             storage.add_log(r)
+            if r["status"] in ("booked", "login_failed", "dry_run"):
+                storage.post_status(s, r, "Computer")
         if not final:
             return {"ok": True, "message": "Nothing to book right now. Everything in the window is already booked."}
         good = sum(1 for r in final.values() if r["status"] in ("booked", "dry_run"))

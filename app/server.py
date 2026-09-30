@@ -80,7 +80,7 @@ def validate(body: dict) -> dict:
             if not lo <= v <= hi:
                 raise ValueError(f"{key.replace('_', ' ')} must be between {lo} and {hi}.")
             out[key] = v
-    for key in ("event_title", "team_plan_url", "recipe_url"):
+    for key in ("event_title", "team_plan_url", "recipe_url", "status_url"):
         if key in body:
             out[key] = str(body[key]).strip()[:300]
     for key in ("show_browser", "paused", "race"):
