@@ -12,7 +12,8 @@ Settings come from environment variables (GitHub secrets and variables):
   ROOMS              rooms in order, like "CB 2103, CB 2302" (variable, optional; overrides the plan)
   MODE               "book" (default), "test" (dry run on the next open day right now)
 
-Exit code 1 means something went wrong (GitHub emails you about failed runs).
+Each run writes its result at the top of its page on GitHub. Exit code 1 means it was not
+set up, sign-in failed, or nothing was booked, so GitHub emails you about it.
 """
 import datetime as dt
 import os
@@ -23,11 +24,21 @@ from . import booker, storage
 from .scheduler import TZ, _hm
 
 # Race if the new day opens within this long; otherwise there is nothing to do this run.
-MAX_WAIT_MINUTES = 180
+# GitHub jobs can run for up to 6 hours, and scheduled starts can be hours late.
+MAX_WAIT_MINUTES = 330
 
 
 def log(msg):
     print(f"[{dt.datetime.now(TZ):%H:%M:%S}] {msg}", flush=True)
+
+
+def summary(title, detail=""):
+    """Show the result at the top of the run's page on GitHub (the job summary)."""
+    log(f"{title} {detail}".strip())
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"## {title}\n\n{detail}\n\n_{dt.datetime.now(TZ):%a %b %d, %I:%M %p} Ottawa time_\n")
 
 
 def settings_from_env():
@@ -69,23 +80,38 @@ def book(s, password, recipe):
         open_at += dt.timedelta(days=1)
     wait = (open_at - now).total_seconds()
     if wait > MAX_WAIT_MINUTES * 60:
-        log(f"The next day opens at {open_at:%a %H:%M}, more than {MAX_WAIT_MINUTES} minutes away. Nothing to do this run.")
+        summary("Nothing to do this run",
+                f"The next day opens {open_at:%a %I:%M %p}, more than {MAX_WAIT_MINUTES // 60} hours away. "
+                "(A run that starts after midnight, or a backup start, ends here.)")
         return 0
     day = open_at.date() + dt.timedelta(days=int(s["days_ahead"]))
-    slot = slot_for(s, day)
-    if not slot:
-        log(f"No slot for {day:%a %b %d} in the team plan. Nothing to book.")
+    if not slot_for(s, day):
+        summary(f"No slot on {day:%a %b %d}", "You have no row for that day in the team plan, so nothing to book.")
         return 0
     lead = int(s.get("race_lead_seconds", 150))
-    log(f"Going for {day:%a %b %d}. Opens at {open_at:%H:%M}; getting ready {lead} s before. Rooms: {', '.join(s['rooms'])}.")
+    log(f"Going for {day:%a %b %d}. Opens at {open_at:%H:%M}; getting ready {lead} s before.")
     while (open_at - dt.datetime.now(TZ)).total_seconds() > lead:
         time.sleep(min(60, (open_at - dt.datetime.now(TZ)).total_seconds() - lead))
+
+    # Read the sheet again right before, so edits made while the job waited count.
+    fresh, _, problem = settings_from_env()
+    if fresh:
+        s = fresh
+    else:
+        log(f"Could not re-read the team plan ({problem}); using the version from the start of the run.")
+    slot = slot_for(s, day)
+    if not slot:
+        summary(f"No slot on {day:%a %b %d}", "Your row for that day was removed from the team plan.")
+        return 0
+    log(f"Rooms: {', '.join(s['rooms'])}. Times: {', '.join(a + '-' + b for a, b in slot['times'])}.")
 
     result = booker.race_booking(s, password, recipe, day, slot, open_at)
     log(result["message"])
     if result["status"] == "booked":
+        summary(f"✅ Booked {day:%a %b %d}", result["message"])
         return 0
     if result["status"] == "login_failed":
+        summary("❌ Sign-in failed", result["message"] + " Update the CARLETON_PASSWORD secret if your password changed.")
         return 1
 
     # Nothing opened up in midnight mode: keep retrying the normal way for a while.
@@ -96,11 +122,14 @@ def book(s, password, recipe):
         r = results[0] if results else {"status": "error", "message": "The browser returned nothing."}
         log(r["message"])
         if r["status"] == "booked":
+            summary(f"✅ Booked {day:%a %b %d}", r["message"] + " (on a retry after midnight)")
             return 0
         if r["status"] == "login_failed":
+            summary("❌ Sign-in failed", r["message"])
             return 1
-    log("Gave up for tonight. Nothing was booked.")
-    return 0 if result["status"] == "unavailable" else 1
+    summary(f"❌ Not booked: {day:%a %b %d}",
+            f"{result['message']} Retried for {s.get('retry_minutes', 20)} minutes. Book by hand on the portal if you still need it.")
+    return 1
 
 
 def test(s, password, recipe):
@@ -117,21 +146,24 @@ def test(s, password, recipe):
         result = booker.race_booking(s, password, recipe, day, slot, dt.datetime.now(TZ), dry_run=True)
         log(result["message"])
         if result["status"] == "dry_run":
-            log("Test passed. Nothing was booked.")
+            summary("✅ Test passed", result["message"])
             return 0
         if result["status"] != "unavailable" or tried >= 3:
+            summary("❌ Test failed", result["message"])
             return 1
-    log("Everything was full (or you already have bookings) on the days tried. Sign-in and the form steps worked.")
+    summary("✅ Test passed (sign-in and form steps work)",
+            "Every choice was full, or you already have bookings, on the days tried, so it could not reach the last step.")
     return 0
 
 
 def main():
-    if not os.environ.get("CARLETON_USERNAME") and not os.environ.get("CARLETON_PASSWORD"):
-        log("Not set up in this repo (no CARLETON_USERNAME / CARLETON_PASSWORD secrets). Skipping.")
-        return 0
+    try:
+        sys.stdout.reconfigure(errors="replace")  # a console without emoji support won't crash
+    except Exception:
+        pass
     s, password, problem = settings_from_env()
     if problem:
-        log(problem)
+        summary("❌ Not set up", problem)
         return 1
     storage.refresh_recipe(s)
     recipe = storage.load_recipe()

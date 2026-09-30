@@ -1,15 +1,18 @@
 name: Book my room
 
-# Runs Canal Booker in the cloud every night. GitHub often starts scheduled jobs late
-# (sometimes 10 to 30 minutes), so the job starts about an hour or more before midnight
-# Ottawa time, then waits and gets ready a couple of minutes before the new day opens.
-# 03:05 and 03:35 UTC = 11:05 and 11:35 pm (EDT, summer), 10:05 and 10:35 pm (EST, winter).
-# The second start is a backup in case GitHub skips the first; if the first is already
-# waiting, the second queues behind it and finds nothing left to do.
+# Runs Canal Booker in the cloud every night. GitHub can start scheduled jobs very late
+# (hours, on a bad night), so there are five starts, one an hour from about 7:17 pm Ottawa
+# time (6:17 pm in winter). The first one that starts waits (a job can run up to 6 hours)
+# and gets ready a couple of minutes before midnight; the later starts queue behind it
+# and end with "Nothing to do". :17 avoids the top of the hour, when delays are worst.
+# For an exact start time, see "Make the start time reliable" in the README.
 on:
   schedule:
-    - cron: "5 3 * * *"
-    - cron: "35 3 * * *"
+    - cron: "17 23 * * *"
+    - cron: "17 0 * * *"
+    - cron: "17 1 * * *"
+    - cron: "17 2 * * *"
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -25,7 +28,7 @@ concurrency:
 jobs:
   book:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

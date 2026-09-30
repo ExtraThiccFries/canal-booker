@@ -17,7 +17,17 @@ Uses free GitHub Actions. You need a GitHub account.
 3. Open the **Actions** tab and click **I understand my workflows, go ahead and enable them**.
 4. Test it: **Actions → Book my room → Run workflow**, leave mode on `test`, click **Run workflow**. After a couple of minutes, open the run. It should say "Midnight mode dry run: … Nothing was booked."
 
-That's it. Every night it starts around 10 or 11 pm (GitHub often starts scheduled jobs late, so it starts early and waits), gets ready a couple of minutes before midnight, and books the moment the day opens. GitHub emails you if a run fails.
+That's it. Every night it starts in the evening (GitHub can start scheduled jobs hours late, so it starts early and waits), gets ready a couple of minutes before midnight, and books the moment the day opens.
+
+**Checking that it worked:** open **Actions**, click last night's **Book my room** run, and read the box at the top: **✅ Booked Wed Oct 7** with the room and time, **❌ Not booked**, **❌ Sign-in failed** or **❌ Not set up**. Anything with ❌ counts as a failed run, and GitHub emails you about it. To get an email for successful bookings too, go to your GitHub **Settings → Notifications → Actions** and untick "Only notify for failed workflows". The portal's **My Bookings** page always shows what you actually have.
+
+**Make the start time reliable (optional, recommended):** GitHub's own schedule can be hours late. A free outside timer can start the run at an exact time instead:
+1. On GitHub: your picture → **Settings → Developer settings → Fine-grained tokens → Generate new token**. Pick only your canal-booker repository, set **Actions** to **Read and write**, and copy the token.
+2. On [cron-job.org](https://cron-job.org) (free), create a job for every day at **11:40 pm** (Toronto time) with:
+   * URL: `https://api.github.com/repos/YOUR-GITHUB-NAME/canal-booker/actions/workflows/book.yml/dispatches`
+   * Method **POST**, body `{"ref":"main","inputs":{"mode":"book"}}`
+   * Headers: `Authorization: Bearer YOUR-TOKEN`, `Accept: application/vnd.github+json`
+3. The token can only run your repo's workflows. It can't read your password secret.
 
 Good to know:
 * Your password is stored as an encrypted GitHub secret and is never shown in logs. Run logs of a public fork can be seen by others, and they show which room and time you booked.
