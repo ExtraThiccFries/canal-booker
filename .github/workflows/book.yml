@@ -16,10 +16,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "test = dry run right now (nothing booked). book = wait for the next midnight and book."
+        description: "test = dry run right now (nothing booked). now = really book every open day in the plan right now. book = wait for the next midnight and book."
         type: choice
-        options: [test, book]
+        options: [test, now, book]
         default: test
+      dates:
+        description: "Only with now: the days to book, like 2026-10-02, 2026-10-06. Blank = every open day in the plan."
+        type: string
+        default: ""
 
 concurrency:
   group: canal-booker
@@ -45,4 +49,5 @@ jobs:
           ROOMS: ${{ vars.ROOMS }}
           STATUS_URL: ${{ vars.STATUS_URL }}
           MODE: ${{ inputs.mode || 'book' }}
+          DATES: ${{ inputs.dates }}
         run: python -m app.cloud
