@@ -10,7 +10,9 @@ Settings come from environment variables (GitHub secrets and variables):
   CARLETON_PASSWORD  your password                        (secret, required)
   TEAM_PLAN_URL      the team plan sheet link             (variable, optional; default in app_defaults.json)
   ROOMS              rooms in order, like "CB 2103, CB 2302" (variable, optional; overrides the plan)
-  MODE               "book" (default), "test" (dry run on the next open day right now)
+  MODE               "book" (default), "test" (dry run on the next open day right now),
+                     "now" (really book every open day in the plan right now)
+  DATES              with "now": only these days, like "2026-10-02, 2026-10-06" (optional)
 
 Each run writes its result at the top of its page on GitHub. Exit code 1 means it was not
 set up, sign-in failed, or nothing was booked, so GitHub emails you about it.
@@ -170,6 +172,37 @@ def test(s, password, recipe):
     return 0
 
 
+def book_now(s, password, recipe):
+    """Book every day that is already open (today to days_ahead) and has a row in the plan.
+    DATES (like "2026-10-02, 2026-10-06") limits it to those days. One booking per day."""
+    today = dt.datetime.now(TZ).date()
+    only = {d.strip() for d in os.environ.get("DATES", "").split(",") if d.strip()}
+    targets = []
+    for offset in range(int(s["days_ahead"]) + 1):
+        day = today + dt.timedelta(days=offset)
+        slot = slot_for(s, day)
+        if slot and (not only or day.isoformat() in only):
+            targets.append((day, slot))
+    if not targets:
+        summary("Nothing to book", "No open day has a row in the team plan" + (" among DATES." if only else "."))
+        return 0
+    log(f"Booking now: {', '.join(f'{d:%a %b %d}' for d, _ in targets)}. Rooms: {', '.join(s['rooms'])}.")
+    results = booker.run_bookings(s, password, recipe, targets)
+    if results and results[0]["status"] == "login_failed":
+        summary("❌ Sign-in failed", results[0]["message"], s, "Sign-in failed")
+        return 1
+    lines, booked = [], 0
+    for (day, _), r in zip(targets, results):
+        log(f"{day:%a %b %d}: {r['message']}")
+        lines.append(f"- {day:%a %b %d}: {r['message']}")
+        if r["status"] == "booked":
+            booked += 1
+        storage.post_status(s, dict(r, date=day.isoformat(), result=storage.RESULT_TEXT.get(r["status"], r["status"])),
+                            "Cloud", name=s.get("_name", ""), url=os.environ.get("STATUS_URL", ""))
+    summary(f"{'✅' if booked else '❌'} Booked {booked} of {len(targets)} days", "\n".join(lines))
+    return 0 if booked else 1
+
+
 def main():
     try:
         sys.stdout.reconfigure(errors="replace")  # a console without emoji support won't crash
@@ -183,7 +216,11 @@ def main():
     storage.refresh_recipe(s)
     recipe = storage.load_recipe()
     mode = os.environ.get("MODE", "book").strip().lower()
-    return test(s, password, recipe) if mode == "test" else book(s, password, recipe)
+    if mode == "test":
+        return test(s, password, recipe)
+    if mode == "now":
+        return book_now(s, password, recipe)
+    return book(s, password, recipe)
 
 
 if __name__ == "__main__":
