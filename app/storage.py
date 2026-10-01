@@ -277,7 +277,14 @@ def fetch_plan(url: str) -> dict:
     if text.lstrip().lower().startswith(("<!doctype", "<html")):
         raise ValueError("Google did not share the sheet. In the sheet, click Share and set General access "
                          "to 'Anyone with the link' (Viewer).")
-    return parse_plan_csv(text)
+    try:
+        return parse_plan_csv(text)
+    except ValueError:
+        # A link without a tab reads the first tab. If another tab (like the Setup guide) was
+        # moved in front of the plan, try the sheet's original tab, which Google numbers gid 0.
+        if re.search(r"[#&?]gid=\d+", url):
+            raise
+        return parse_plan_csv(_fetch_text(url.split("#")[0] + "#gid=0"))
 
 
 def shared_defaults(settings: dict) -> dict:
