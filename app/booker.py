@@ -69,7 +69,17 @@ def _launch(p, show):
     raise RuntimeError("No browser found. Please install Google Chrome or Microsoft Edge.") from last
 
 
-def run_steps(page, steps, ctx, dry_run=False):
+def _settle(page):
+    """Wait for the portal to finish reloading the form after a click or dropdown change."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=5000)
+    except Exception:
+        pass
+
+
+def run_steps(page, steps, ctx, dry_run=False, settle=False):
+    """settle=True waits for the page to go quiet after each click or dropdown change. Slower,
+    so it is used for the early preparation, not for the steps raced at the open time."""
     for i, step in enumerate(steps):
         if step.get("submit") and dry_run:
             return "dry_run"
@@ -100,6 +110,8 @@ def run_steps(page, steps, ctx, dry_run=False):
                     loc.wait_for(state="visible", timeout=timeout)
                 else:
                     raise ValueError(f"Unknown step action '{action}'")
+                if settle and action in ("click", "select", "press", "check"):
+                    _settle(page)
         except Exception as e:
             if step.get("optional"):
                 continue
@@ -182,6 +194,7 @@ def _clock_offset(page, url):
 
 
 MAX_RACE_TABS = 6
+PREPARE_TRIES = 3
 
 
 def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
@@ -219,17 +232,26 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
             return result
         offset = _clock_offset(first, race.get("clock_url", "https://booking.carleton.ca/"))
 
+        open_local = open_at.timestamp() - offset
         tabs = []
         for i, (room, (start_text, end_text)) in enumerate(options):
             page = first if i == 0 else context.new_page()
             ctx = _ctx(base, recipe, day, room, start_text, end_text)
             label = f"{room} {start_text}-{end_text}"
-            try:
-                run_steps(page, prepare, ctx)
-                tabs.append({"page": page, "ctx": ctx, "label": label, "room": room,
-                             "time": f"{start_text}-{end_text}", "alive": True})
-            except StepFailed as e:
-                notes.append(f"{label} could not get ready at '{_step_label(e)}'")
+            for attempt in range(PREPARE_TRIES):
+                try:
+                    run_steps(page, prepare, ctx, settle=True)
+                    tabs.append({"page": page, "ctx": ctx, "label": label, "room": room,
+                                 "time": f"{start_text}-{end_text}", "alive": True})
+                    break
+                except StepFailed as e:
+                    # Start the tab over from the first page, unless the open time is under
+                    # 30 s away (a test run starts after the open time, so it always retries).
+                    if attempt + 1 < PREPARE_TRIES and not (open_local - 30 <= time.time() < open_local):
+                        continue
+                    notes.append(f"{label} could not get ready at '{_step_label(e)}' "
+                                 f"({_scrub(e.detail, password)})")
+                    _shot(page, f"{day}_race_prepare_{room}_{start_text}")
         if not tabs:
             result.update(status="error", message="Midnight mode: no choice got ready. " + "; ".join(notes),
                           screenshot=_shot(first, f"{day}_race_prepare_failed"))
@@ -237,7 +259,6 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
             return result
 
         # Wait on the page until 3 seconds before the portal's clock reaches the open time.
-        open_local = open_at.timestamp() - offset
         already_open = time.time() >= open_local
         while time.time() < open_local - 3:
             first.wait_for_timeout(min(1000, max(50, (open_local - 3 - time.time()) * 1000)))
@@ -309,7 +330,7 @@ def run_bookings(settings, password, recipe, targets, dry_run=False):
                 label = f"{room} {start_text}-{end_text}"
                 ctx = _ctx(base, recipe, day, room, start_text, end_text)
                 try:
-                    outcome = run_steps(page, recipe.get("book", []), ctx, dry_run=dry_run)
+                    outcome = run_steps(page, recipe.get("book", []), ctx, dry_run=dry_run, settle=True)
                     shot = _shot(page, f"{day}_{start_text}_{room}_{outcome}")
                     booked_time = f"{start_text}-{end_text}"
                     if outcome == "dry_run":

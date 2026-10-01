@@ -26,7 +26,8 @@ function setup() {
 }
 
 function makeGuide_(ss) {
-  var g = ss.getSheetByName(GUIDE) || ss.insertSheet(GUIDE, 0);
+  // After the plan tab, never in front of it: a sheet link without a tab reads the first tab.
+  var g = ss.getSheetByName(GUIDE) || ss.insertSheet(GUIDE, 1);
   g.clear();
   var lines = [
     ['# Canal Booker: how to set it up'],
