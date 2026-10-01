@@ -280,11 +280,33 @@ def fetch_plan(url: str) -> dict:
     try:
         return parse_plan_csv(text)
     except ValueError:
-        # A link without a tab reads the first tab. If another tab (like the Setup guide) was
-        # moved in front of the plan, try the sheet's original tab, which Google numbers gid 0.
+        # A link without a tab reads the first tab. If another tab (like the Setup guide) is in
+        # front of the plan, look up the sheet's other tabs and use the first one with a plan.
         if re.search(r"[#&?]gid=\d+", url):
             raise
-        return parse_plan_csv(_fetch_text(url.split("#")[0] + "#gid=0"))
+        for gid in _sheet_tab_ids(url):
+            try:
+                return parse_plan_csv(_fetch_text(url.split("#")[0] + f"#gid={gid}"))
+            except Exception:
+                continue
+        raise
+
+
+def _sheet_tab_ids(url: str) -> list:
+    """The tab ids (gids) of a shared Google Sheet, read from its public view page."""
+    sheet_id = _SHEET.search(url).group(1)
+    try:  # not _fetch_text, which would turn this link into a CSV export
+        req = urllib.request.Request(f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview",
+                                     headers={"User-Agent": "CanalBooker"})
+        with urllib.request.urlopen(req, timeout=10, context=_SSL) as r:
+            html = r.read().decode("utf-8", "replace")
+    except Exception:
+        return []
+    ids = []
+    for gid in re.findall(r"(?:gid(?:=|\\x3d|\\u003d|[\"']?\s*:\s*[\"']?)|sheet-button-)(\d+)", html):
+        if gid not in ids:
+            ids.append(gid)
+    return ids[:20]
 
 
 def shared_defaults(settings: dict) -> dict:
