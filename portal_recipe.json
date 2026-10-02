@@ -27,7 +27,7 @@
     {"action": "select", "selector": "#cboEndTime", "value": "{end_min}", "by": "value", "note": "Set 'and' end time"},
     {"action": "click", "selector": "#btnAnyDate", "note": "Verify Calendar"},
     {"action": "click", "selector": "td.dayAvailable:has(#day{date_epoch})", "timeout": 10000, "on_fail": "unavailable", "race_start": true, "note": "Pick the date (only works if the room is free then)"},
-    {"action": "expect", "selector": "input[value='Book']", "timeout": 10000, "on_fail": "unavailable", "note": "Wait for the list of start times (none means every time that day is taken)"},
+    {"action": "expect", "selector": "input[value='Book']:visible", "timeout": 10000, "on_fail": "unavailable", "note": "Wait for the list of start times (none means every time that day is taken)"},
     {"action": "click", "selector": "tr:has(td:text-is('{start}')) input[value='Book']", "timeout": 1500, "on_fail": "unavailable", "note": "Click Book next to the start time (opens the confirmation page, does not book yet)"},
     {"action": "click", "selector": ".MessageBoxWindow #btnOK", "optional": true, "timeout": 2000, "note": "Close an info popup if one appears"},
     {"action": "click", "selector": "#btnConfirm", "timeout": 20000, "note": "Click Confirm on the Booking Confirmation page (opens the final OK popup)"},
