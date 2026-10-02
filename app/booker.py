@@ -263,6 +263,10 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
         while time.time() < open_local - 3:
             first.wait_for_timeout(min(1000, max(50, (open_local - 3 - time.time()) * 1000)))
 
+        def _when():
+            after = time.time() + offset - open_at.timestamp()
+            return "(the day was already open)" if already_open else f"{max(after, 0):.1f} s after opening"
+
         deadline = max(open_local, time.time()) + window
         while time.time() < deadline and any(t["alive"] for t in tabs):
             round_start = time.time()
@@ -280,21 +284,23 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
                     continue
                 try:
                     outcome = run_steps(t["page"], grab, t["ctx"], dry_run=dry_run)
-                    after = time.time() + offset - open_at.timestamp()
-                    when = "(the day was already open)" if already_open else f"{max(after, 0):.1f} s after opening"
+                    when = _when()
                     shot = _shot(t["page"], f"{day}_race_{t['room']}_{outcome}")
+                    # Say what happened to the choices tried before this one (taken by someone else, and when).
+                    before = f" Before that: {'; '.join(notes)}." if notes else ""
                     if outcome == "dry_run":
                         result.update(room=t["room"], time=t["time"], status="dry_run", screenshot=shot,
-                                      message=f"Midnight mode dry run: {t['label']} was free {when}. Nothing was booked.")
+                                      message=f"Midnight mode dry run: {t['label']} was free {when}. Nothing was booked.{before}")
                     else:
                         result.update(room=t["room"], time=t["time"], status="booked", screenshot=shot,
-                                      message=f"Midnight mode booked {t['label']} {when}.")
+                                      message=f"Midnight mode booked {t['label']} {when}.{before}")
                     browser.close()
                     return result
                 except StepFailed as e:
                     t["alive"] = False
-                    notes.append(f"{t['label']} " + ("was taken first" if e.outcome == "unavailable"
-                                                     else f"failed at '{_step_label(e)}'"))
+                    notes.append(f"{t['label']} " + (f"was taken by someone else (seen {_when()})"
+                                                     if e.outcome == "unavailable"
+                                                     else f"failed at '{_step_label(e)}' {_when()}"))
                     result["screenshot"] = _shot(t["page"], f"{day}_race_{t['room']}_{e.outcome}")
             left = poll - (time.time() - round_start)
             if left > 0:
