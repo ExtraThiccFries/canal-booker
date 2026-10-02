@@ -12,7 +12,7 @@ Settings come from environment variables (GitHub secrets and variables):
   ROOMS              rooms in order, like "CB 2103, CB 2302" (variable, optional; overrides the plan)
   MODE               "book" (default), "test" (dry run on the next open day right now),
                      "now" (really book every open day in the plan right now)
-  DATES              with "now": only these days, like "2026-10-02, 2026-10-06" (optional)
+  DATES              with "now" or "test": only these days, like "2026-10-02, 2026-10-06" (optional)
 
 Each run writes its result at the top of its page on GitHub. Exit code 1 means it was not
 set up, sign-in failed, or nothing was booked, so GitHub emails you about it.
@@ -150,10 +150,11 @@ def test(s, password, recipe):
     """Dry run of midnight mode right now, on the next day that is already open."""
     s = dict(s, race_window_seconds=8)  # the day is already open; don't wait long on a full day
     tried = 0
+    only = {d.strip() for d in os.environ.get("DATES", "").split(",") if d.strip()}
     for offset in range(int(s["days_ahead"]), 0, -1):
         day = dt.datetime.now(TZ).date() + dt.timedelta(days=offset)
         slot = slot_for(s, day)
-        if not slot:
+        if not slot or (only and day.isoformat() not in only):
             continue
         tried += 1
         log(f"Test (dry run) on {day:%a %b %d}. Rooms: {', '.join(s['rooms'])}.")
@@ -164,7 +165,10 @@ def test(s, password, recipe):
                     date=day.isoformat(), room=result.get("room"), time=result.get("time"))
             return 0
         if result["status"] != "unavailable" or tried >= 3:
-            summary("❌ Test failed", result["message"], s, "Test failed", date=day.isoformat())
+            hint = (" The portal shows a day as unavailable when every choice is taken, or when you already"
+                    " have 3 hours booked that day. Try other days or rooms (dates and rooms boxes)."
+                    if result["status"] == "unavailable" else "")
+            summary("❌ Test failed", result["message"] + hint, s, "Test failed", date=day.isoformat())
             return 1
     summary("✅ Test passed (sign-in and form steps work)",
             "Every choice was full, or you already have bookings, on the days tried, so it could not reach the last step.",
