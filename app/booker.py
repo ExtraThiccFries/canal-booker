@@ -135,10 +135,28 @@ def _timing_text(timings):
     return ", ".join(f"{n.split(' (')[0][:32]} {s:.2f} s" for n, s in timings)
 
 
+_MARK = "() => document.querySelectorAll(\"[id^='day']\").forEach(e => e.setAttribute('data-cb-old', '1'))"
+_RELOADING = "() => !!document.querySelector('[data-cb-old]')"
+
+
+def _reloading(page):
+    """True while a reload started by _fire is still on its way: the marked calendar days are
+    still on the page (or the page is between documents)."""
+    try:
+        return page.evaluate(_RELOADING)
+    except Exception:
+        return True
+
+
 def _fire(page, steps, ctx):
     """Start the race "refresh" steps (Verify Calendar) without waiting for the page to reload, so
     every tab reloads at the same time. Clicks go through the page's own JavaScript; anything that
-    is not a simple click falls back to the normal step runner."""
+    is not a simple click falls back to the normal step runner. The calendar's day cells are marked
+    first: the reload is done when the marked cells are gone (replaced or a new page)."""
+    try:
+        page.evaluate(_MARK)
+    except Exception:
+        pass
     for step in steps:
         if step.get("action") == "click":
             try:
@@ -152,6 +170,15 @@ def _fire(page, steps, ctx):
             run_steps(page, [step], ctx)
         except StepFailed:
             pass
+
+
+def _measure_reload(page, steps, ctx, limit=5.0):
+    """Seconds one calendar reload takes on the portal (fire, then wait until it is replaced)."""
+    started = time.time()
+    _fire(page, steps, ctx)
+    while _reloading(page) and time.time() - started < limit:
+        page.wait_for_timeout(20)
+    return time.time() - started
 
 
 def _step_label(err: StepFailed):
@@ -282,14 +309,13 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
 
         open_local = open_at.timestamp() - offset
         tabs = []
-        prep_times = []  # how long the portal took for each preparation step (first tab)
         for i, (room, (start_text, end_text)) in enumerate(options):
             page = first if i == 0 else context.new_page()
             ctx = _ctx(base, recipe, day, room, start_text, end_text)
             label = f"{room} {start_text}-{end_text}"
             for attempt in range(PREPARE_TRIES):
                 try:
-                    run_steps(page, prepare, ctx, settle=True, timings=prep_times if not tabs else None)
+                    run_steps(page, prepare, ctx, settle=True)
                     tabs.append({"page": page, "ctx": ctx, "label": label, "room": room,
                                  "time": f"{start_text}-{end_text}", "alive": True})
                     break
@@ -321,8 +347,8 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
         ready_sel = race["ready"]
         # How long one calendar reload takes on the portal (the last preparation step, measured above).
         # Near the open time each waiting tab reloads again as soon as the last reload could be back.
-        reload_s = next((s for n, s in reversed(prep_times) if "Verify" in n), 1.0)
-        rapid = max(0.35, reload_s - 0.5)  # that measurement includes a 0.5 s wait for the page to go quiet
+        reload_s = _measure_reload(tabs[0]["page"], refresh, tabs[0]["ctx"])
+        rapid = max(0.3, reload_s)
         next_fire = time.time()  # first reload now (3 s early), the next one right at the open time
         sync = f"Portal clock {offset:+.2f} s from ours; calendar reload {reload_s:.2f} s."
 
@@ -337,8 +363,12 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
             if now >= next_fire:
                 # Reload every waiting tab's calendar at the same time instead of one after another.
                 for t in tabs:
-                    if t["alive"] and not is_ready(t):
+                    # Never click again while this tab's last reload is still loading (that would
+                    # cancel it), unless it has been stuck for 2.5 s.
+                    if t["alive"] and not is_ready(t) and (
+                            not _reloading(t["page"]) or now - t.get("fired", 0) > 2.5):
                         _fire(t["page"], refresh, t["ctx"])
+                        t["fired"] = now
                 if now < open_local:
                     next_fire = open_local + 0.05
                 elif now < open_local + 8:
