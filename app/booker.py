@@ -136,12 +136,14 @@ def _timing_text(timings):
 
 
 _MARK = "() => document.querySelectorAll(\"[id^='day']\").forEach(e => e.setAttribute('data-cb-old', '1'))"
-_RELOADING = "() => !!document.querySelector('[data-cb-old]')"
+# Still reloading while the marked old days are on the page, or while no days are shown yet (the
+# portal clears the calendar the moment Verify Calendar is clicked and fills it when the answer arrives).
+_RELOADING = "() => !!document.querySelector('[data-cb-old]') || !document.querySelector(\"[id^='day']\")"
 
 
 def _reloading(page):
-    """True while a reload started by _fire is still on its way: the marked calendar days are
-    still on the page (or the page is between documents)."""
+    """True while a reload started by _fire is still on its way: the marked calendar days are still
+    on the page, no new days are shown yet, or the page is between documents."""
     try:
         return page.evaluate(_RELOADING)
     except Exception:
