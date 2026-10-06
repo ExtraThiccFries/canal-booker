@@ -83,7 +83,7 @@ def _settle(page):
         pass
 
 
-def run_steps(page, steps, ctx, dry_run=False, settle=False):
+def run_steps(page, steps, ctx, dry_run=False, settle=False, timings=None):
     """settle=True waits for the page to go quiet after each click or dropdown change. Slower,
     so it is used for the early preparation, not for the steps raced at the open time."""
     for i, step in enumerate(steps):
@@ -91,6 +91,7 @@ def run_steps(page, steps, ctx, dry_run=False, settle=False):
             return "dry_run"
         action = step.get("action")
         timeout = step.get("timeout", 10000)
+        started = time.time()
         try:
             if action == "goto":
                 page.goto(_render(step["url"], ctx), wait_until="domcontentloaded", timeout=30000)
@@ -118,11 +119,20 @@ def run_steps(page, steps, ctx, dry_run=False, settle=False):
                     raise ValueError(f"Unknown step action '{action}'")
                 if settle and action in ("click", "select", "press", "check"):
                     _settle(page)
+            if timings is not None:
+                timings.append((step.get("note") or action, time.time() - started))
         except Exception as e:
+            if timings is not None:
+                timings.append(((step.get("note") or action) + " (failed)", time.time() - started))
             if step.get("optional"):
                 continue
             raise StepFailed(step.get("on_fail", "error"), i, step, e)
     return "done"
+
+
+def _timing_text(timings):
+    """'Pick the date 0.31 s, Wait for the list ... 0.52 s' with notes cut short."""
+    return ", ".join(f"{n.split(' (')[0][:32]} {s:.2f} s" for n, s in timings)
 
 
 def _fire(page, steps, ctx):
@@ -207,13 +217,25 @@ def _ctx(base, recipe, day, room, start_text, end_text):
 
 
 def _clock_offset(page, url):
-    """Seconds the portal's clock is ahead of ours, from its Date header (about 1 second precise)."""
-    try:
+    """Seconds the portal's clock is ahead of ours.
+
+    The Date header only has whole seconds, so one reading is up to half a second off. Instead,
+    ask about every 0.1 s until the portal's second ticks over: the tick happened between the two
+    readings, which pins the offset down to roughly 0.1 s plus half the round trip."""
+    def read():
         before = time.time()
         resp = page.request.head(url, timeout=10000)
         after = time.time()
-        server = email.utils.parsedate_to_datetime(resp.headers["date"]).timestamp()
-        return server + 0.5 - (before + after) / 2
+        return (before + after) / 2, email.utils.parsedate_to_datetime(resp.headers["date"]).timestamp()
+    try:
+        prev_mid, prev_s = read()
+        for _ in range(25):
+            time.sleep(0.1)
+            mid, s = read()
+            if s > prev_s:  # the second ticked between the previous reading and this one
+                return s - (prev_mid + mid) / 2
+            prev_mid, prev_s = mid, s
+        return prev_s + 0.5 - prev_mid  # no tick seen: fall back to the middle of the second
     except Exception:
         return 0.0
 
@@ -260,13 +282,14 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
 
         open_local = open_at.timestamp() - offset
         tabs = []
+        prep_times = []  # how long the portal took for each preparation step (first tab)
         for i, (room, (start_text, end_text)) in enumerate(options):
             page = first if i == 0 else context.new_page()
             ctx = _ctx(base, recipe, day, room, start_text, end_text)
             label = f"{room} {start_text}-{end_text}"
             for attempt in range(PREPARE_TRIES):
                 try:
-                    run_steps(page, prepare, ctx, settle=True)
+                    run_steps(page, prepare, ctx, settle=True, timings=prep_times if not tabs else None)
                     tabs.append({"page": page, "ctx": ctx, "label": label, "room": room,
                                  "time": f"{start_text}-{end_text}", "alive": True})
                     break
@@ -296,7 +319,12 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
         deadline = max(open_local, time.time()) + window
         refresh = race.get("refresh", [])
         ready_sel = race["ready"]
+        # How long one calendar reload takes on the portal (the last preparation step, measured above).
+        # Near the open time each waiting tab reloads again as soon as the last reload could be back.
+        reload_s = next((s for n, s in reversed(prep_times) if "Verify" in n), 1.0)
+        rapid = max(0.35, reload_s - 0.5)  # that measurement includes a 0.5 s wait for the page to go quiet
         next_fire = time.time()  # first reload now (3 s early), the next one right at the open time
+        sync = f"Portal clock {offset:+.2f} s from ours; calendar reload {reload_s:.2f} s."
 
         def is_ready(t):
             try:
@@ -311,7 +339,12 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
                 for t in tabs:
                     if t["alive"] and not is_ready(t):
                         _fire(t["page"], refresh, t["ctx"])
-                next_fire = open_local + 0.05 if now < open_local else now + poll
+                if now < open_local:
+                    next_fire = open_local + 0.05
+                elif now < open_local + 8:
+                    next_fire = now + rapid  # the first seconds after opening: reload again quickly
+                else:
+                    next_fire = now + poll
             ready = [t for t in tabs if t["alive"] and is_ready(t)]
             if not ready:
                 first.wait_for_timeout(100)
@@ -323,17 +356,19 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
             t = ready[0]  # the best choice that is open right now
             try:
                 t["page"].bring_to_front()  # a tab in front is not slowed down by the browser
-                outcome = run_steps(t["page"], grab, t["ctx"], dry_run=dry_run)
+                steps_timed = []
+                outcome = run_steps(t["page"], grab, t["ctx"], dry_run=dry_run, timings=steps_timed)
                 when = _when()
                 shot = _shot(t["page"], f"{day}_race_{t['room']}_{outcome}")
                 # Say what happened to the choices tried before this one (taken by someone else, and when).
                 before = f" Before that: {'; '.join(notes)}." if notes else ""
+                timing = f" {sync} Step times: {_timing_text(steps_timed)}."
                 if outcome == "dry_run":
                     result.update(room=t["room"], time=t["time"], status="dry_run", screenshot=shot,
-                                  message=f"Midnight mode dry run: {t['label']} was free {when}. Nothing was booked.{before}")
+                                  message=f"Midnight mode dry run: {t['label']} was free {when}. Nothing was booked.{before}{timing}")
                 else:
                     result.update(room=t["room"], time=t["time"], status="booked", screenshot=shot,
-                                  message=f"Midnight mode booked {t['label']} {when}.{before}")
+                                  message=f"Midnight mode booked {t['label']} {when}.{before}{timing}")
                 browser.close()
                 return result
             except StepFailed as e:
@@ -345,7 +380,7 @@ def race_booking(settings, password, recipe, day, slot, open_at, dry_run=False):
                                                  else f"failed at '{_step_label(e)}' {_when()}"))
         if notes:
             result["message"] += " " + "; ".join(notes) + "."
-        result["message"] += " " + _calendar_seen(tabs, day)
+        result["message"] += " " + _calendar_seen(tabs, day) + " " + sync
         result["screenshot"] = _shot(tabs[0]["page"], f"{day}_race_nothing_booked")
         browser.close()
     return result
